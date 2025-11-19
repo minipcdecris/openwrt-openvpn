@@ -23,16 +23,16 @@ cd /etc/easy-rsa
 sed -i 's/#set_var EASYRSA_CA_EXPIRE.*/set_var EASYRSA_CA_EXPIRE      99999/' vars
 sed -i 's/#set_var EASYRSA_CERT_EXPIRE.*/set_var EASYRSA_CERT_EXPIRE    99999/' vars
 
-echo -e "yes\nyes" | ./easyrsa init-pki
-echo -e "yes\nserver" | ./easyrsa build-ca nopass
-echo -e "yes" | ./easyrsa build-server-full server nopass
+echo -e "yes\nyes" | easyrsa init-pki
+echo -e "yes\nserver" | easyrsa build-ca nopass
+echo -e "yes" | easyrsa build-server-full server nopass
 
 for i in $(seq 1 $NUM_CLIENTES); do
     echo "Generando client$i..."
-    echo -e "yes" | ./easyrsa build-client-full client$i nopass
+    echo -e "yes" | easyrsa build-client-full client$i nopass
 done
 
-./easyrsa gen-dh
+easyrsa gen-dh
 
 # Copiar archivos
 cp /etc/easy-rsa/pki/ca.crt /etc/openvpn/
