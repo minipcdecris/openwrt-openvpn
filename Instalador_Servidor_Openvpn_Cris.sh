@@ -1,4 +1,3 @@
-cat > /tmp/Instalador_Servidor_Openvpn_Cris.sh << 'EOF'
 #!/bin/sh
 
 # Función para verificar si el comando se ejecutó correctamente
@@ -197,7 +196,3 @@ echo -e "\033[32m- Bundle: /etc/openvpn/clientes_openvpn.tar.gz\033[0m"
 echo -e "\n\033[33m- Reiniciando en 10 segundos...\033[0m"
 sleep 10
 reboot
-EOF
-
-chmod +x /tmp/Instalador_Servidor_Openvpn_Cris.sh
-/tmp/Instalador_Servidor_Openvpn_Cris.sh
