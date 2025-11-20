@@ -9,7 +9,7 @@ check_status() {
 }
 
 echo "================================================"
-echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
+echo "    INSTALADOR SERVIDOR OPENVPN - SIN RESTART"
 echo "       CONFIGURACIÓN BR-VPN PERSONALIZADA"
 echo "================================================"
 echo ""
@@ -112,32 +112,36 @@ uci set firewall.@rule[-1].proto='udp'
 uci set firewall.@rule[-1].dest_port="$VPN_PORT"
 uci set firewall.@rule[-1].target='ACCEPT'
 uci commit firewall
-/etc/init.d/firewall restart
-check_status || exit 1
+/etc/init.d/firewall reload
 echo "✅ Firewall configurado"
 echo ""
 
-# 5. CREAR BRIDGE BR-VPN PERSONALIZADO
+# 5. CREAR BRIDGE BR-VPN SIN NETWORK RESTART
 echo "🔧 PASO 5: CREANDO BRIDGE BR-VPN..."
 echo "----------------------------------"
-# Crear interfaz tap0
+# Crear interfaz tap0 manualmente
 ip tuntap add mode tap tap0
 ifconfig tap0 up
 
-# Configurar bridge br-vpn personalizado
+# Crear bridge br-vpn manualmente
+brctl addbr br-vpn
+brctl addif br-vpn tap0
+ifconfig br-vpn up
+
+# Configurar UCI para persistencia (sin restart)
 uci set network.br-vpn=device
 uci set network.br-vpn.type='bridge'
 uci set network.br-vpn.name='br-vpn'
 uci add_list network.br-vpn.ports='tap0'
 uci set network.br-vpn.igmp_snooping='1'
 
-# Crear interfaz vpn
 uci set network.vpn=interface
 uci set network.vpn.proto='none'
 uci set network.vpn.device='br-vpn'
 
+# Solo commit sin restart
 uci commit network
-echo "✅ Bridge br-vpn creado y configurado"
+echo "✅ Bridge br-vpn creado manualmente"
 echo ""
 
 # 6. GENERAR ARCHIVOS CLIENTE .OVPN
@@ -174,13 +178,13 @@ done
 echo "✅ Todos los archivos .ovpn generados"
 echo ""
 
-# 7. INICIAR SERVICIOS
+# 7. INICIAR SERVICIOS SIN NETWORK RESTART
 echo "🚀 PASO 7: INICIANDO SERVICIOS..."
 echo "-------------------------------"
 /etc/init.d/openvpn enable
 /etc/init.d/openvpn start
-sleep 5
-echo "✅ Servicios iniciados"
+sleep 3
+echo "✅ OpenVPN iniciado"
 echo ""
 
 # 8. VERIFICACIÓN FINAL
@@ -209,11 +213,11 @@ else
     echo "   ❌ Bridge br-vpn NO activo"
 fi
 
-echo "🔹 Verificando configuración de red..."
+echo "🔹 Verificando configuración UCI..."
 echo "   📊 Interfaz vpn:"
-uci show network.vpn
+uci get network.vpn.proto && echo "   ✅ Interfaz vpn configurada"
 echo "   📊 Dispositivo br-vpn:"
-uci show network.br-vpn
+uci get network.br-vpn.name && echo "   ✅ Dispositivo br-vpn configurado"
 
 echo "🔹 Verificando archivos cliente..."
 for i in $(seq 1 $NUM_CLIENTES); do
@@ -239,25 +243,26 @@ echo "📍 CONFIGURACIÓN DE RED:"
 echo "   🔸 Dispositivo: br-vpn (bridge)"
 echo "   🔸 Interfaz: vpn"
 echo "   🔸 Puertos: tap0"
-echo "   🔸 IGMP Snooping: Activado"
+echo "   🔸 Configuración: Manual (sin network restart)"
 echo ""
 echo "📍 ARCHIVOS GENERADOS:"
 echo "   🔸 En /tmp/: client1.ovpn ... client$NUM_CLIENTES.ovpn"
-echo "   🔸 En /etc/openvpn/: Configuración del servidor"
 echo ""
 echo "📍 PRÓXIMOS PASOS:"
-echo "   1. Descargar archivos .ovpn desde /tmp/"
-echo "   2. Configurar routers clientes"
-echo "   3. Los clientes se conectarán al bridge br-vpn"
+echo "   1. Los archivos .ovpn están listos en /tmp/"
+echo "   2. Para persistencia, reinicia manualmente luego: reboot"
+echo "   3. Configura los routers clientes"
 echo ""
-echo "📍 CONFIGURACIÓN LUCI:"
-echo "   🔸 Interfaz: Network → Interfaces → vpn"
-echo "   🔸 Dispositivo: Network → Devices → br-vpn"
+echo "⚠️  IMPORTANTE:"
+echo "   Para que la configuración de red sea permanente,"
+echo "   necesitas reiniciar el router manualmente cuando"
+echo "   sea conveniente con el comando: reboot"
 echo ""
-echo "🔄 El sistema se reiniciará automáticamente en 15 segundos..."
-echo "   Presiona Ctrl+C para cancelar el reinicio"
-echo ""
-
-sleep 15
-echo "Reiniciando..."
-reboot
+echo "¿Quieres reiniciar ahora? (s/n): "
+read REINICIAR
+if [ "$REINICIAR" = "s" ]; then
+    echo "Reiniciando..."
+    reboot
+else
+    echo "Puedes reiniciar manualmente luego con: reboot"
+    echo "Los archivos cliente están en /tmp/client*.ovpn"
