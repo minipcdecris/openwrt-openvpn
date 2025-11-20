@@ -177,7 +177,6 @@ echo ""
 # 7. INICIAR SERVICIOS
 echo "🚀 PASO 7: INICIANDO SERVICIOS..."
 echo "-------------------------------"
-/etc/init.d/network restart
 /etc/init.d/openvpn enable
 /etc/init.d/openvpn start
 sleep 5
