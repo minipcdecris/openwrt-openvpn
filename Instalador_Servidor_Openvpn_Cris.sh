@@ -58,13 +58,13 @@ check_status || echo "⚠️  Algunos paquetes pueden no estar disponibles"
 echo "✅ Paquetes instalados"
 echo ""
 
-# 2. CONFIGURAR DUCKDNS AUTOMÁTICAMENTE (CORREGIDO)
+# 2. CONFIGURAR DUCKDNS AUTOMÁTICAMENTE
 echo "🦆 PASO 2: CONFIGURANDO DUCKDNS..."
 echo "---------------------------------"
 # Eliminar servicios existentes de DDNS
 while uci delete ddns.@service[0] 2>/dev/null; do :; done
 
-# Crear nuevo servicio DuckDNS CON CONFIGURACIÓN CORREGIDA
+# Crear nuevo servicio DuckDNS con la configuración exacta
 uci add ddns service
 uci set ddns.@service[-1].enabled='1'
 uci set ddns.@service[-1].service_name='duckdns.org'
@@ -74,8 +74,8 @@ uci set ddns.@service[-1].username="$DUCKDNS_DOMAIN"
 uci set ddns.@service[-1].password="$DUCKDNS_TOKEN"
 uci set ddns.@service[-1].interface='wan'
 
-# CONFIGURACIÓN CORREGIDA: usar 'web' en lugar de 'url'
-uci set ddns.@service[-1].ip_source='web'
+# Configuración Advanced Settings
+uci set ddns.@service[-1].ip_source='url'
 uci set ddns.@service[-1].ip_url='http://checkip.dyndns.com'
 
 # Configuración Timer
@@ -85,11 +85,15 @@ uci set ddns.@service[-1].force_unit='minutes'
 
 uci commit ddns
 
-echo "✅ DuckDNS configurado correctamente"
+# Habilitar e iniciar servicio DDNS
+/etc/init.d/ddns enable
+/etc/init.d/ddns start
+
+echo "✅ DuckDNS configurado automáticamente"
 echo "   🔸 Lookup Hostname: $DDNS_SERVER"
 echo "   🔸 DDNS Service: duckdns.org"
 echo "   🔸 Domain: $DDNS_SERVER"
-echo "   🔸 IP Source: web (corregido)"
+echo "   🔸 IP Source: URL"
 echo "   🔸 Check Interval: 300"
 echo "   🔸 Force Interval: 5"
 echo ""
@@ -223,17 +227,12 @@ done
 echo "✅ Todos los archivos .ovpn generados"
 echo ""
 
-# 8. INICIAR SERVICIOS (CORREGIDO)
+# 8. INICIAR SERVICIOS
 echo "🚀 PASO 8: INICIANDO SERVICIOS..."
 echo "-------------------------------"
 /etc/init.d/openvpn enable
 /etc/init.d/openvpn start
-
-# Iniciar DuckDNS pero ignorar errores temporales
-echo "🔹 Iniciando DuckDNS..."
-/etc/init.d/ddns enable
-/etc/init.d/ddns start 2>/dev/null || echo "⚠️  DuckDNS puede necesitar configuración adicional"
-
+/etc/init.d/ddns restart
 sleep 3
 echo "✅ Servicios iniciados"
 echo ""
@@ -242,30 +241,18 @@ echo ""
 echo "🔍 PASO 9: VERIFICACIÓN FINAL..."
 echo "-------------------------------"
 echo "🔹 Verificando OpenVPN..."
-if pgrep openvpn >/dev/null; then
-    echo "   ✅ OpenVPN está corriendo"
-else
-    echo "   ❌ OpenVPN NO está corriendo"
-fi
+pgrep openvpn >/dev/null && echo "   ✅ OpenVPN corriendo" || echo "   ❌ OpenVPN no corre"
+
+echo "🔹 Verificando DuckDNS..."
+/etc/init.d/ddns running && echo "   ✅ DuckDNS corriendo" || echo "   ❌ DuckDNS no corre"
 
 echo "🔹 Verificando interfaces..."
 ifconfig tap0 >/dev/null 2>&1 && echo "   ✅ tap0 activa" || echo "   ❌ tap0 inactiva"
 ifconfig br-vpn >/dev/null 2>&1 && echo "   ✅ br-vpn activo" || echo "   ❌ br-vpn inactivo"
 
-echo "🔹 Verificando DuckDNS..."
-if /etc/init.d/ddns enabled; then
-    echo "   ✅ DuckDNS habilitado"
-else
-    echo "   ❌ DuckDNS no habilitado"
-fi
-
 echo "🔹 Verificando archivos cliente..."
 for i in $(seq 1 $NUM_CLIENTES); do
-    if [ -f "/tmp/client$i.ovpn" ]; then
-        echo "   ✅ client$i.ovpn disponible"
-    else
-        echo "   ❌ client$i.ovpn NO encontrado"
-    fi
+    [ -f "/tmp/client$i.ovpn" ] && echo "   ✅ client$i.ovpn" || echo "   ❌ client$i.ovpn faltante"
 done
 echo ""
 
@@ -275,7 +262,7 @@ echo "========================================"
 echo ""
 echo "📍 SERVICIOS CONFIGURADOS:"
 echo "   🔸 OpenVPN: ✅ $DDNS_SERVER:$VPN_PORT"
-echo "   🔸 DuckDNS: ✅ Configurado (ip_source corregido a 'web')"
+echo "   🔸 DuckDNS: ✅ Configurado automáticamente"
 echo "   🔸 Bridge: ✅ br-vpn con interfaz vpn"
 echo ""
 echo "📍 CONFIGURACIÓN DUCKDNS:"
@@ -283,15 +270,20 @@ echo "   🔸 Lookup Hostname: $DDNS_SERVER"
 echo "   🔸 DDNS Service: duckdns.org"
 echo "   🔸 Domain: $DDNS_SERVER"
 echo "   🔸 Username: $DUCKDNS_DOMAIN"
-echo "   🔸 IP Source: web (corregido)"
-echo "   🔸 URL: http://checkip.dyndns.com"
+echo "   🔸 IP Source: URL (http://checkip.dyndns.com)"
 echo "   🔸 Check Interval: 300"
 echo "   🔸 Force Interval: 5"
 echo ""
 echo "📍 ARCHIVOS CLIENTE:"
 echo "   🔸 /tmp/client1.ovpn ... client$NUM_CLIENTES.ovpn"
 echo ""
-echo "🔄 Reiniciando en 30 segundos para aplicar configuración..."
+echo "📍 PARA VERIFICAR EN LUCI:"
+echo "   🔸 DuckDNS: Services → Dynamic DNS"
+echo "   🔸 OpenVPN: Services → OpenVPN"
+echo "   🔸 Red: Network → Interfaces → vpn"
+echo "   🔸 Dispositivo: Network → Devices → br-vpn"
+echo ""
+echo "🔄 Reiniciando en 15 segundos para aplicar configuración..."
 sleep 15
 echo "Reiniciando..."
 reboot
