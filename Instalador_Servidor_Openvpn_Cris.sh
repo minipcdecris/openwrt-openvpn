@@ -10,69 +10,14 @@ check_status() {
 
 echo "================================================"
 echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
-echo "          INCLUYENDO DUCKDNS"
+echo "       CONFIGURACIÓN BR-VPN PERSONALIZADA"
 echo "================================================"
 echo ""
 
-# CONFIGURACIÓN DUCKDNS
-echo "📋 CONFIGURACIÓN DUCKDNS"
-echo "-----------------------"
-read -p "🔹 ¿Quieres configurar DuckDNS? (s/n): " CONFIGURAR_DUCKDNS
-
-if [ "$CONFIGURAR_DUCKDNS" = "s" ]; then
-    echo ""
-    echo "🦆 CONFIGURANDO DUCKDNS..."
-    echo "------------------------"
-    read -p "🔹 Tu dominio DuckDNS (sin .duckdns.org): " DUCKDNS_DOMAIN
-    read -p "🔹 Token de DuckDNS: " DUCKDNS_TOKEN
-    
-    DDNS_SERVER="${DUCKDNS_DOMAIN}.duckdns.org"
-    
-    echo ""
-    echo "🔹 Instalando DuckDNS..."
-    opkg update
-    opkg install ddns-scripts ddns-scripts-duckdns luci-app-ddns
-    check_status || echo "⚠️  DuckDNS no disponible, continuando sin él"
-    
-    if opkg list-installed | grep -q "ddns-scripts-duckdns"; then
-        echo "🔹 Configurando DuckDNS..."
-        # Eliminar configuraciones existentes
-        while uci delete ddns.@service[0] 2>/dev/null; do :; done
-        
-        # Crear nueva configuración
-        uci add ddns service
-        uci set ddns.@service[-1].enabled='1'
-        uci set ddns.@service[-1].service_name='duckdns.org'
-        uci set ddns.@service[-1].domain="$DDNS_SERVER"
-        uci set ddns.@service[-1].lookup_host="$DDNS_SERVER"
-        uci set ddns.@service[-1].username="$DUCKDNS_DOMAIN"
-        uci set ddns.@service[-1].password="$DUCKDNS_TOKEN"
-        uci set ddns.@service[-1].interface='wan'
-        uci set ddns.@service[-1].ip_source='url'
-        uci set ddns.@service[-1].ip_url='http://checkip.dyndns.com'
-        uci set ddns.@service[-1].check_interval='300'
-        uci set ddns.@service[-1].force_interval='5'
-        
-        uci commit ddns
-        /etc/init.d/ddns enable
-        /etc/init.d/ddns start
-        
-        echo "✅ DuckDNS configurado: $DDNS_SERVER"
-    else
-        echo "⚠️  DuckDNS no instalado, usando dominio manual"
-        read -p "🔹 Introduce tu DDNS o IP manualmente: " DDNS_SERVER
-    fi
-else
-    echo ""
-    echo "📋 CONFIGURACIÓN MANUAL"
-    echo "----------------------"
-    read -p "🔹 DDNS o IP pública: " DDNS_SERVER
-fi
-
-# CONFIGURACIÓN OPENVPN
-echo ""
-echo "📋 CONFIGURACIÓN OPENVPN"
-echo "-----------------------"
+# CONFIGURACIÓN BÁSICA
+echo "📋 CONFIGURACIÓN DEL SERVIDOR"
+echo "-----------------------------"
+read -p "🔹 DDNS o IP pública: " DDNS_SERVER
 read -p "🔹 Puerto OpenVPN (1194): " VPN_PORT
 VPN_PORT=${VPN_PORT:-1194}
 read -p "🔹 Número de clientes (4): " NUM_CLIENTES
@@ -82,11 +27,7 @@ echo ""
 echo "📍 RESUMEN:"
 echo "   Servidor: $DDNS_SERVER:$VPN_PORT"
 echo "   Clientes: $NUM_CLIENTES"
-if [ "$CONFIGURAR_DUCKDNS" = "s" ]; then
-    echo "   DuckDNS: Configurado"
-else
-    echo "   DuckDNS: No configurado"
-fi
+echo "   Interfaz: br-vpn (bridge personalizado)"
 echo ""
 
 # Confirmar
@@ -176,28 +117,27 @@ check_status || exit 1
 echo "✅ Firewall configurado"
 echo ""
 
-# 5. CREAR INTERFAZ TAP0 MANUALMENTE
-echo "🔧 PASO 5: CREANDO INTERFAZ TAP0..."
+# 5. CREAR BRIDGE BR-VPN PERSONALIZADO
+echo "🔧 PASO 5: CREANDO BRIDGE BR-VPN..."
 echo "----------------------------------"
 # Crear interfaz tap0
 ip tuntap add mode tap tap0
 ifconfig tap0 up
 
-# Añadir tap0 al bridge br-lan
-brctl addif br-lan tap0
+# Configurar bridge br-vpn personalizado
+uci set network.br-vpn=device
+uci set network.br-vpn.type='bridge'
+uci set network.br-vpn.name='br-vpn'
+uci add_list network.br-vpn.ports='tap0'
+uci set network.br-vpn.igmp_snooping='1'
 
-# Configurar permanentemente en UCI
-uci set network.tap0=interface
-uci set network.tap0.ifname='tap0'
-uci set network.tap0.proto='none'
-uci set network.tap0.auto='1'
-
-# Añadir tap0 al bridge br-lan permanentemente
-uci add_list network.lan.ports='tap0'
-uci set network.lan.igmp_snooping='1'
+# Crear interfaz vpn
+uci set network.vpn=interface
+uci set network.vpn.proto='none'
+uci set network.vpn.device='br-vpn'
 
 uci commit network
-echo "✅ Interfaz tap0 creada y configurada"
+echo "✅ Bridge br-vpn creado y configurado"
 echo ""
 
 # 6. GENERAR ARCHIVOS CLIENTE .OVPN
@@ -237,15 +177,9 @@ echo ""
 # 7. INICIAR SERVICIOS
 echo "🚀 PASO 7: INICIANDO SERVICIOS..."
 echo "-------------------------------"
+/etc/init.d/network restart
 /etc/init.d/openvpn enable
 /etc/init.d/openvpn start
-
-# Iniciar DuckDNS si se configuró
-if [ "$CONFIGURAR_DUCKDNS" = "s" ] && opkg list-installed | grep -q "ddns-scripts-duckdns"; then
-    /etc/init.d/ddns restart
-    echo "✅ DuckDNS iniciado"
-fi
-
 sleep 5
 echo "✅ Servicios iniciados"
 echo ""
@@ -267,14 +201,20 @@ else
     echo "   ❌ Interfaz tap0 NO activa"
 fi
 
-if [ "$CONFIGURAR_DUCKDNS" = "s" ]; then
-    echo "🔹 Verificando DuckDNS..."
-    if /etc/init.d/ddns running; then
-        echo "   ✅ DuckDNS está corriendo"
-    else
-        echo "   ❌ DuckDNS NO está corriendo"
-    fi
+echo "🔹 Verificando bridge br-vpn..."
+if ifconfig br-vpn >/dev/null 2>&1; then
+    echo "   ✅ Bridge br-vpn activo"
+    echo "   📊 Estado del bridge:"
+    brctl show br-vpn
+else
+    echo "   ❌ Bridge br-vpn NO activo"
 fi
+
+echo "🔹 Verificando configuración de red..."
+echo "   📊 Interfaz vpn:"
+uci show network.vpn
+echo "   📊 Dispositivo br-vpn:"
+uci show network.br-vpn
 
 echo "🔹 Verificando archivos cliente..."
 for i in $(seq 1 $NUM_CLIENTES); do
@@ -294,23 +234,26 @@ echo "📍 INFORMACIÓN DEL SERVIDOR:"
 echo "   🔸 Dirección: $DDNS_SERVER"
 echo "   🔸 Puerto: $VPN_PORT"
 echo "   🔸 Protocolo: UDP"
-echo "   🔸 Interfaz: tap0"
+echo "   🔸 Interfaz: br-vpn (bridge personalizado)"
 echo ""
-echo "📍 SERVICIOS CONFIGURADOS:"
-echo "   🔸 OpenVPN: ✅ Activo"
-if [ "$CONFIGURAR_DUCKDNS" = "s" ]; then
-    echo "   🔸 DuckDNS: ✅ Configurado"
-else
-    echo "   🔸 DuckDNS: ❌ No configurado"
-fi
+echo "📍 CONFIGURACIÓN DE RED:"
+echo "   🔸 Dispositivo: br-vpn (bridge)"
+echo "   🔸 Interfaz: vpn"
+echo "   🔸 Puertos: tap0"
+echo "   🔸 IGMP Snooping: Activado"
 echo ""
 echo "📍 ARCHIVOS GENERADOS:"
 echo "   🔸 En /tmp/: client1.ovpn ... client$NUM_CLIENTES.ovpn"
+echo "   🔸 En /etc/openvpn/: Configuración del servidor"
 echo ""
 echo "📍 PRÓXIMOS PASOS:"
 echo "   1. Descargar archivos .ovpn desde /tmp/"
 echo "   2. Configurar routers clientes"
-echo "   3. Los clientes estarán en la red 192.168.1.x"
+echo "   3. Los clientes se conectarán al bridge br-vpn"
+echo ""
+echo "📍 CONFIGURACIÓN LUCI:"
+echo "   🔸 Interfaz: Network → Interfaces → vpn"
+echo "   🔸 Dispositivo: Network → Devices → br-vpn"
 echo ""
 echo "🔄 El sistema se reiniciará automáticamente en 15 segundos..."
 echo "   Presiona Ctrl+C para cancelar el reinicio"
