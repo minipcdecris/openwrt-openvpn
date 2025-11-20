@@ -291,11 +291,7 @@ echo ""
 echo "📍 ARCHIVOS CLIENTE:"
 echo "   🔸 /tmp/client1.ovpn ... client$NUM_CLIENTES.ovpn"
 echo ""
-echo "⚠️  NOTA SOBRE DUCKDNS:"
-echo "   El error 'ip_source url' ha sido corregido usando 'web'"
-echo "   DuckDNS debería funcionar correctamente ahora"
-echo ""
-echo "🔄 Reiniciando en 15 segundos para aplicar configuración..."
+echo "🔄 Reiniciando en 30 segundos para aplicar configuración..."
 sleep 15
 echo "Reiniciando..."
 reboot
