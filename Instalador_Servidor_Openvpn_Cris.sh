@@ -9,8 +9,8 @@ check_status() {
 }
 
 echo "================================================"
-echo "    INSTALADOR SERVIDOR OPENVPN - SIN RESTART"
-echo "       CONFIGURACIÓN BR-VPN PERSONALIZADA"
+echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
+echo "       BR-VPN + CONFIGURACIÓN DUCKDNS"
 echo "================================================"
 echo ""
 
@@ -30,12 +30,32 @@ echo "   Clientes: $NUM_CLIENTES"
 echo "   Interfaz: br-vpn (bridge personalizado)"
 echo ""
 
-# Confirmar
-read -p "¿Continuar? (s/n): " CONFIRMAR
+# CONFIGURACIÓN DUCKDNS MANUAL
+echo ""
+echo "🦆 CONFIGURACIÓN DUCKDNS MANUAL"
+echo "------------------------------"
+echo "Para configurar DuckDNS manualmente en LuCI:"
+echo ""
+echo "1. Ve a: Services → Dynamic DNS"
+echo "2. Haz click en: Add new service"
+echo "3. Configura los siguientes valores:"
+echo "   - Lookup Hostname: $DDNS_SERVER"
+echo "   - DDNS Service Provider: duckdns.org"
+echo "   - Domain: $DDNS_SERVER"
+echo "   - Username: [Tu usuario DuckDNS]"
+echo "   - Password: [Tu token DuckDNS]"
+echo "4. En Advanced Settings:"
+echo "   - IP address source: URL"
+echo "   - URL to detect: http://checkip.dyndns.com"
+echo "   - Check Interval: 300"
+echo "   - Force Interval: 5"
+echo ""
+
+read -p "¿Continuar con la instalación OpenVPN? (s/n): " CONFIRMAR
 [ "$CONFIRMAR" != "s" ] && echo "Instalación cancelada." && exit 0
 
 echo ""
-echo "🚀 INICIANDO INSTALACIÓN..."
+echo "🚀 INICIANDO INSTALACIÓN OPENVPN..."
 echo ""
 
 # 1. INSTALACIÓN DE PAQUETES OPENVPN
@@ -213,12 +233,6 @@ else
     echo "   ❌ Bridge br-vpn NO activo"
 fi
 
-echo "🔹 Verificando configuración UCI..."
-echo "   📊 Interfaz vpn:"
-uci get network.vpn.proto && echo "   ✅ Interfaz vpn configurada"
-echo "   📊 Dispositivo br-vpn:"
-uci get network.br-vpn.name && echo "   ✅ Dispositivo br-vpn configurado"
-
 echo "🔹 Verificando archivos cliente..."
 for i in $(seq 1 $NUM_CLIENTES); do
     if [ -f "/tmp/client$i.ovpn" ]; then
@@ -229,34 +243,45 @@ for i in $(seq 1 $NUM_CLIENTES); do
 done
 echo ""
 
-# 9. RESUMEN FINAL
-echo "🎉 INSTALACIÓN COMPLETADA EXITOSAMENTE!"
-echo "========================================"
+# 9. RESUMEN FINAL CON INSTRUCCIONES DUCKDNS
+echo "🎉 INSTALACIÓN OPENVPN COMPLETADA!"
+echo "==================================="
 echo ""
 echo "📍 INFORMACIÓN DEL SERVIDOR:"
 echo "   🔸 Dirección: $DDNS_SERVER"
 echo "   🔸 Puerto: $VPN_PORT"
 echo "   🔸 Protocolo: UDP"
-echo "   🔸 Interfaz: br-vpn (bridge personalizado)"
-echo ""
-echo "📍 CONFIGURACIÓN DE RED:"
-echo "   🔸 Dispositivo: br-vpn (bridge)"
-echo "   🔸 Interfaz: vpn"
-echo "   🔸 Puertos: tap0"
-echo "   🔸 Configuración: Manual (sin network restart)"
+echo "   🔸 Interfaz: br-vpn"
 echo ""
 echo "📍 ARCHIVOS GENERADOS:"
 echo "   🔸 En /tmp/: client1.ovpn ... client$NUM_CLIENTES.ovpn"
 echo ""
-echo "📍 PRÓXIMOS PASOS:"
-echo "   1. Los archivos .ovpn están listos en /tmp/"
-echo "   2. Para persistencia, reinicia manualmente luego: reboot"
-echo "   3. Configura los routers clientes"
+echo "🦆 CONFIGURACIÓN DUCKDNS MANUAL:"
+echo "================================"
+echo "Para completar la configuración:"
 echo ""
-echo "⚠️  IMPORTANTE:"
-echo "   Para que la configuración de red sea permanente,"
-echo "   necesitas reiniciar el router manualmente cuando"
-echo "   sea conveniente con el comando: reboot"
+echo "1. Ve a LuCI: http://$(uci get network.lan.ipaddr 2>/dev/null || echo '192.168.1.1')"
+echo "2. Navega a: Services → Dynamic DNS"
+echo "3. Haz click en: Add new service"
+echo "4. Configura los siguientes valores:"
+echo "   - Lookup Hostname: $DDNS_SERVER"
+echo "   - DDNS Service Provider: duckdns.org"
+echo "   - Domain: $DDNS_SERVER"
+echo "   - Username: [Tu usuario DuckDNS]"
+echo "   - Password: [Tu token DuckDNS]"
+echo "5. En Advanced Settings:"
+echo "   - IP address source: URL"
+echo "   - URL to detect: http://checkip.dyndns.com"
+echo "   - Check Interval: 300"
+echo "   - Force Interval: 5"
+echo ""
+echo "📍 CONFIGURACIÓN DE RED EN LUCI:"
+echo "   🔸 Interfaz: Network → Interfaces → vpn"
+echo "   🔸 Dispositivo: Network → Devices → br-vpn"
+echo ""
+echo "⚠️  PARA PERSISTENCIA:"
+echo "   Reinicia el router manualmente cuando sea conveniente:"
+echo "   reboot"
 echo ""
 echo "¿Quieres reiniciar ahora? (s/n): "
 read REINICIAR
@@ -264,5 +289,6 @@ if [ "$REINICIAR" = "s" ]; then
     echo "Reiniciando..."
     reboot
 else
-    echo "Puedes reiniciar manualmente luego con: reboot"
-    echo "Los archivos cliente están en /tmp/client*.ovpn"
+    echo "✅ Instalación completada. Reinicia luego con: reboot"
+    echo "📁 Archivos cliente en: /tmp/client*.ovpn"
+fi
