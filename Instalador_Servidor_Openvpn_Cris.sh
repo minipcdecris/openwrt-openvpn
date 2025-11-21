@@ -66,6 +66,21 @@ echo ""
 echo "🚀 INICIANDO INSTALACIÓN COMPLETA..."
 echo ""
 
+# Función para el spinner
+spinner() {
+    local pid=$1
+    local delay=0.5
+    local spinstr='|/-\'
+    while [ -d /proc/$pid ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
 # 1. INSTALACIÓN DE PAQUETES
 echo "📦 PASO 1: INSTALANDO PAQUETES..."
 echo "--------------------------------"
@@ -142,8 +157,10 @@ for i in $(seq 1 $NUM_CLIENTES); do
 done
 echo "   [DONE] Certificados de clientes generados"
 
-echo "   [....] Generando parámetros Diffie-Hellman..."
-easyrsa gen-dh > /dev/null 2>&1
+echo -n "   [....] Generando parámetros Diffie-Hellman "
+(easyrsa gen-dh > /dev/null 2>&1) &
+spinner $!
+echo ""
 echo "   [DONE] Parámetros Diffie-Hellman generados"
 
 echo "✅ Todos los certificados generados correctamente"
