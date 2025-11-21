@@ -88,6 +88,7 @@ if [ -n "$DUCKDNS_SERVICE" ]; then
     uci set ddns.$DUCKDNS_SERVICE.ip_source='web'
     uci set ddns.$DUCKDNS_SERVICE.ip_url='http://checkip.dyndns.com'
     uci set ddns.$DUCKDNS_SERVICE.check_interval='300'
+    uci set ddns.$DUCKDNS_SERVICE.check_unit='seconds'  # ✅ MODIFICADO: segundos en lugar de minutos
     uci set ddns.$DUCKDNS_SERVICE.force_interval='5'
     uci set ddns.$DUCKDNS_SERVICE.force_unit='minutes'
     
@@ -100,6 +101,7 @@ if [ -n "$DUCKDNS_SERVICE" ]; then
     echo "   🔸 Username: $DUCKDNS_DOMAIN"
     echo "   🔸 IP Source: web"
     echo "   🔸 Check Interval: 300"
+    echo "   🔸 Check Unit: seconds"  # ✅ MODIFICADO
 else
     echo "❌ No se encontró servicio DuckDNS existente"
     echo "⚠️  Configura DuckDNS manualmente en LuCI después"
@@ -271,6 +273,7 @@ echo "📍 SERVICIOS CONFIGURADOS:"
 echo "   🔸 OpenVPN: ✅ $DDNS_SERVER:$VPN_PORT"
 if [ -n "$DUCKDNS_SERVICE" ]; then
     echo "   🔸 DuckDNS: ✅ Configurado automáticamente"
+    echo "   🔸 Check Unit: ✅ seconds (segundos)"
 else
     echo "   🔸 DuckDNS: ❌ Requiere configuración manual"
 fi
