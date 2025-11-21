@@ -79,7 +79,7 @@ print_info() {
 # Función para entrada de usuario
 user_input() {
     echo "${WHITE}┌─ ${YELLOW}? ${WHITE}$1${NC}"
-    echo "${WHITE}└─${CYAN}→${NC} "
+    echo -n "${WHITE}└─${CYAN}→${NC} "
 }
 
 # Función para mostrar progreso
