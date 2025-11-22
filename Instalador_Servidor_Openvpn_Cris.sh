@@ -3,7 +3,7 @@
 echo ""
 echo "================================================"
 echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
-echo "       BR-VPN + DUCKDNS EDITABLE de CRIS"
+echo "       BR-VPN + DUCKDNS EDITABLE"
 echo "================================================"
 echo ""
 
@@ -50,56 +50,12 @@ echo "Número de clientes (4): "
 read NUM_CLIENTES
 NUM_CLIENTES=${NUM_CLIENTES:-4}
 
-# SELECCIÓN DE SEGURIDAD
-echo ""
-echo "🛡️  CONFIGURACIÓN DE SEGURIDAD"
-echo "------------------------------"
-echo "¿Qué nivel de acceso quieres para los clientes VPN?"
-echo ""
-echo "1) 🔓 Acceso completo a red local"
-echo "   - Los clientes pueden acceder a TODOS los dispositivos (192.168.1.*)"
-echo "   - Ideal para uso personal/confiable"
-echo ""
-echo "2) 🔐 Acceso limitado a servicios específicos"
-echo "   - Los clientes solo pueden acceder a puertos comunes (web, SSH)"
-echo "   - No pueden ver otros dispositivos de la red"
-echo "   - Equilibrio entre seguridad y funcionalidad"
-echo ""
-echo "3) 🛡️ Solo acceso a internet"
-echo "   - Los clientes solo tienen acceso a internet"
-echo "   - No pueden acceder a tu red local"
-echo "   - Máxima seguridad para invitados"
-echo ""
-echo "Selecciona una opción (1/2/3): "
-read OPCION_SEGURIDAD
-
-case $OPCION_SEGURIDAD in
-    1)
-        MODO_SEGURIDAD="completo"
-        DESCRIPCION="ACCESO COMPLETO a red local"
-        ;;
-    2)
-        MODO_SEGURIDAD="limitado"
-        DESCRIPCION="ACCESO LIMITADO a servicios específicos"
-        ;;
-    3)
-        MODO_SEGURIDAD="solo_internet"
-        DESCRIPCION="SOLO ACCESO A INTERNET"
-        ;;
-    *)
-        echo "❌ Opción no válida. Usando modo seguro (solo internet)."
-        MODO_SEGURIDAD="solo_internet"
-        DESCRIPCION="SOLO ACCESO A INTERNET"
-        ;;
-esac
-
 echo ""
 echo "📍 RESUMEN:"
 echo "   DuckDNS: $DDNS_SERVER"
 echo "   Servidor: $DDNS_SERVER:$VPN_PORT"
 echo "   Clientes: $NUM_CLIENTES"
 echo "   Interfaz: br-vpn"
-echo "   Seguridad: $DESCRIPCION"
 echo ""
 
 echo "¿Continuar con la instalación? (s/n): "
@@ -218,195 +174,50 @@ config openvpn 'VPN_Server'
     option cert '/etc/openvpn/server.crt'
     option key '/etc/openvpn/server.key'
     option dh '/etc/openvpn/dh.pem'
-    option server_bridge '1'
-    option keepalive '10 120'
-    option client_to_client '1'
-    option duplicate_cn '0'
 CFG
 echo "   [DONE] Servidor OpenVPN configurado"
 
-# 5. CONFIGURAR FIREWALL SEGÚN MODO DE SEGURIDAD
+# 5. CONFIGURAR FIREWALL
 echo "🔥 PASO 5: CONFIGURANDO FIREWALL..."
 echo "----------------------------------"
-echo "   [....] Configurando modo: $DESCRIPCION"
-
-# Limpiar configuraciones previas si existen
-uci delete firewall.Allow_OpenVPN 2>/dev/null
-uci delete firewall.vpn 2>/dev/null
-uci delete firewall.VPN_full_access 2>/dev/null
-uci delete firewall.LAN_to_VPN 2>/dev/null
-
-# Regla básica para permitir conexiones OpenVPN
-uci set firewall.Allow_OpenVPN=rule
-uci set firewall.Allow_OpenVPN.name='Allow-OpenVPN'
-uci set firewall.Allow_OpenVPN.src='wan'
-uci set firewall.Allow_OpenVPN.proto='udp'
-uci set firewall.Allow_OpenVPN.dest_port="$VPN_PORT"
-uci set firewall.Allow_OpenVPN.target='ACCEPT'
-
-# Crear zona VPN
-uci set firewall.vpn=zone
-uci set firewall.vpn.name='vpn'
-uci set firewall.vpn.network='vpn'
-uci set firewall.vpn.input='ACCEPT'
-uci set firewall.vpn.output='ACCEPT'
-uci set firewall.vpn.forward='ACCEPT'
-
-# Configurar según el modo de seguridad seleccionado
-case $MODO_SEGURIDAD in
-    "completo")
-        # 🔓 ACCESO COMPLETO
-        echo "        🔓 CONFIGURANDO ACCESO COMPLETO A RED LOCAL"
-        
-        # Reglas de forwarding completo entre VPN y LAN
-        uci set firewall.vpn_lan=forwarding
-        uci set firewall.vpn_lan.src='vpn'
-        uci set firewall.vpn_lan.dest='lan'
-
-        uci set firewall.lan_vpn=forwarding
-        uci set firewall.lan_vpn.src='lan'
-        uci set firewall.lan_vpn.dest='vpn'
-
-        # Permitir tráfico completo entre VPN y LAN
-        uci set firewall.VPN_full_access=rule
-        uci set firewall.VPN_full_access.name='VPN-full-access'
-        uci set firewall.VPN_full_access.src='vpn'
-        uci set firewall.VPN_full_access.dest='lan'
-        uci set firewall.VPN_full_access.proto='all'
-        uci set firewall.VPN_full_access.target='ACCEPT'
-
-        uci set firewall.LAN_to_VPN=rule
-        uci set firewall.LAN_to_VPN.name='LAN-to-VPN'
-        uci set firewall.LAN_to_VPN.src='lan'
-        uci set firewall.LAN_to_VPN.dest='vpn'
-        uci set firewall.LAN_to_VPN.proto='all'
-        uci set firewall.LAN_to_VPN.target='ACCEPT'
-        ;;
-
-    "limitado")
-        # 🔐 ACCESO LIMITADO
-        echo "        🔐 CONFIGURANDO ACCESO LIMITADO"
-        
-        # NO forwarding automático - control manual con reglas
-        # Permitir solo puertos específicos de LAN a VPN
-        uci set firewall.VPN_to_LAN_web=rule
-        uci set firewall.VPN_to_LAN_web.name='VPN-to-LAN-web'
-        uci set firewall.VPN_to_LAN_web.src='vpn'
-        uci set firewall.VPN_to_LAN_web.dest='lan'
-        uci set firewall.VPN_to_LAN_web.proto='tcp'
-        uci set firewall.VPN_to_LAN_web.dest_port='80 443'  # HTTP/HTTPS
-        uci set firewall.VPN_to_LAN_web.target='ACCEPT'
-
-        uci set firewall.VPN_to_LAN_ssh=rule
-        uci set firewall.VPN_to_LAN_ssh.name='VPN-to-LAN-ssh'
-        uci set firewall.VPN_to_LAN_ssh.src='vpn'
-        uci set firewall.VPN_to_LAN_ssh.dest='lan'
-        uci set firewall.VPN_to_LAN_ssh.proto='tcp'
-        uci set firewall.VPN_to_LAN_ssh.dest_port='22'       # SSH
-        uci set firewall.VPN_to_LAN_ssh.target='ACCEPT'
-
-        uci set firewall.VPN_to_LAN_dns=rule
-        uci set firewall.VPN_to_LAN_dns.name='VPN-to-LAN-dns'
-        uci set firewall.VPN_to_LAN_dns.src='vpn'
-        uci set firewall.VPN_to_LAN_dns.dest='lan'
-        uci set firewall.VPN_to_Lan_dns.proto='udp'
-        uci set firewall.VPN_to_LAN_dns.dest_port='53'       # DNS
-        uci set firewall.VPN_to_LAN_dns.target='ACCEPT'
-
-        # Denegar el resto del tráfico a LAN
-        uci set firewall.Block_VPN_to_LAN=rule
-        uci set firewall.Block_VPN_to_LAN.name='Block-VPN-to-LAN'
-        uci set firewall.Block_VPN_to_LAN.src='vpn'
-        uci set firewall.Block_VPN_to_LAN.dest='lan'
-        uci set firewall.Block_VPN_to_LAN.proto='all'
-        uci set firewall.Block_VPN_to_LAN.target='REJECT'
-        ;;
-
-    "solo_internet")
-        # 🛡️ SOLO INTERNET
-        echo "        🛡️ CONFIGURANDO SOLO ACCESO A INTERNET"
-        
-        # Permitir solo salida a internet (WAN)
-        uci set firewall.VPN_to_WAN=rule
-        uci set firewall.VPN_to_WAN.name='VPN-to-WAN'
-        uci set firewall.VPN_to_WAN.src='vpn'
-        uci set firewall.VPN_to_WAN.dest='wan'
-        uci set firewall.VPN_to_WAN.proto='all'
-        uci set firewall.VPN_to_WAN.target='ACCEPT'
-
-        # Denegar acceso a LAN
-        uci set firewall.Block_VPN_to_LAN=rule
-        uci set firewall.Block_VPN_to_LAN.name='Block-VPN-to-LAN'
-        uci set firewall.Block_VPN_to_LAN.src='vpn'
-        uci set firewall.Block_VPN_to_LAN.dest='lan'
-        uci set firewall.Block_VPN_to_LAN.proto='all'
-        uci set firewall.Block_VPN_to_LAN.target='REJECT'
-        ;;
-esac
-
-# Permitir siempre internet para clientes VPN
-uci set firewall.VPN_to_Internet=rule
-uci set firewall.VPN_to_Internet.name='VPN-to-Internet'
-uci set firewall.VPN_to_Internet.src='vpn'
-uci set firewall.VPN_to_Internet.dest='wan'
-uci set firewall.VPN_to_Internet.proto='all'
-uci set firewall.VPN_to_Internet.target='ACCEPT'
-
+echo "   [....] Agregando reglas de firewall..."
+uci add firewall rule
+uci set firewall.@rule[-1].name='Allow-OpenVPN'
+uci set firewall.@rule[-1].src='wan'
+uci set firewall.@rule[-1].proto='udp'
+uci set firewall.@rule[-1].dest_port="$VPN_PORT"
+uci set firewall.@rule[-1].target='ACCEPT'
 uci commit firewall > /dev/null 2>&1
 /etc/init.d/firewall reload > /dev/null 2>&1
-echo "   [DONE] Firewall configurado - $DESCRIPCION"
+echo "   [DONE] Firewall configurado"
 
-# 6. CREAR BRIDGE BR-VPN CON RED (VERSIÓN CORREGIDA)
-echo "🔧 PASO 6: CREANDO BRIDGE BR-VPN CON RED..."
-echo "------------------------------------------"
+# 6. CREAR BRIDGE BR-VPN
+echo "🔧 PASO 6: CREANDO BRIDGE BR-VPN..."
+echo "----------------------------------"
 echo "   [....] Creando interfaz tap0..."
-ip tuntap add mode tap tap0 2>/dev/null
-ifconfig tap0 up 2>/dev/null
+ip tuntap add mode tap tap0
+ifconfig tap0 up
 echo "   [DONE] Interfaz tap0 creada"
 
 echo "   [....] Creando bridge br-vpn..."
-brctl addbr br-vpn 2>/dev/null
-brctl addif br-vpn tap0 2>/dev/null
-ifconfig br-vpn up 2>/dev/null
+brctl addbr br-vpn
+brctl addif br-vpn tap0
+ifconfig br-vpn up
 echo "   [DONE] Bridge br-vpn creado"
 
-echo "   [....] Configurando red para br-vpn..."
-# Limpiar configuraciones previas
-uci delete network.br-vpn 2>/dev/null
-uci delete network.vpn 2>/dev/null
-uci delete dhcp.vpn 2>/dev/null
-
-# Configurar bridge como dispositivo
+echo "   [....] Configurando persistencia..."
 uci set network.br-vpn=device
 uci set network.br-vpn.type='bridge'
 uci set network.br-vpn.name='br-vpn'
+uci add_list network.br-vpn.ports='tap0'
+uci set network.br-vpn.igmp_snooping='1'
 
-# Configurar interfaz para el bridge
 uci set network.vpn=interface
-uci set network.vpn.proto='static'
+uci set network.vpn.proto='none'
 uci set network.vpn.device='br-vpn'
-uci set network.vpn.ipaddr='10.8.0.1'
-uci set network.vpn.netmask='255.255.255.0'
 
-# Configurar DHCP para clientes VPN
-uci set dhcp.vpn=dhcp
-uci set dhcp.vpn.interface='vpn'
-uci set dhcp.vpn.start='100'
-uci set dhcp.vpn.limit='150'
-uci set dhcp.vpn.leasetime='12h'
-
-uci commit network
-uci commit dhcp
-
-# Reiniciar servicios de red
-echo "   [....] Aplicando configuración de red..."
-/etc/init.d/network restart
-sleep 5
-/etc/init.d/dnsmasq restart
-sleep 2
-echo "   [DONE] Red configurada (10.8.0.0/24)"
-echo "      └─ Servidor: 10.8.0.1"
-echo "      └─ Clientes: 10.8.0.100 - 10.8.0.249"
+uci commit network > /dev/null 2>&1
+echo "   [DONE] Configuración persistente aplicada"
 
 # 7. GENERAR Y MOSTRAR ARCHIVOS CLIENTE
 echo "📄 PASO 7: GENERANDO Y MOSTRANDO ARCHIVOS CLIENTE..."
@@ -425,12 +236,10 @@ proto udp
 remote $DDNS_SERVER $VPN_PORT
 resolv-retry infinite
 nobind
-persist-key
-persist-tun
-remote-cert-tls server
+float
 cipher AES-256-GCM
-verb 3
-
+keepalive 15 60
+remote-cert-tls server
 <ca>
 $(cat /etc/openvpn/ca.crt)
 </ca>
@@ -479,7 +288,7 @@ echo "   [....] Reiniciando DuckDNS..."
 /etc/init.d/ddns restart > /dev/null 2>&1
 echo "   [DONE] DuckDNS reiniciado"
 
-sleep 5
+sleep 2
 echo "✅ Todos los servicios iniciados correctamente"
 echo ""
 
@@ -498,58 +307,36 @@ else
     echo "   ❌ OpenVPN: INACTIVO"
 fi
 
-# Verificar interfaces de red
-echo ""
-echo "🔍 CONFIGURACIÓN DE RED:"
-if ifconfig br-vpn >/dev/null 2>&1; then
-    echo "   ✅ Bridge br-vpn: ACTIVO"
-    ifconfig br-vpn | grep 'inet addr' | while read line; do
-        echo "      └─ $line"
-    done
+# Verificar DuckDNS
+if [ -n "$DUCKDNS_SERVICE" ]; then
+    if uci get ddns.$DUCKDNS_SERVICE.enabled >/dev/null 2>&1; then
+        echo "   ✅ DuckDNS: CONFIGURADO"
+    else
+        echo "   ❌ DuckDNS: NO CONFIGURADO"
+    fi
 else
-    echo "   ❌ Bridge br-vpn: INACTIVO"
+    echo "   ⚠️ DuckDNS: CONFIGURACIÓN MANUAL REQUERIDA"
 fi
 
+# Verificar interfaces
 if ifconfig tap0 >/dev/null 2>&1; then
     echo "   ✅ Interfaz tap0: ACTIVA"
 else
     echo "   ❌ Interfaz tap0: INACTIVA"
 fi
 
-# Verificar DHCP
-if uci get dhcp.vpn >/dev/null 2>&1; then
-    echo "   ✅ DHCP VPN: CONFIGURADO"
-    echo "      └─ Rango: 10.8.0.100 - 10.8.0.249"
+if ifconfig br-vpn >/dev/null 2>&1; then
+    echo "   ✅ Bridge br-vpn: ACTIVO"
 else
-    echo "   ❌ DHCP VPN: NO CONFIGURADO"
+    echo "   ❌ Bridge br-vpn: INACTIVO"
 fi
-
-# Verificar firewall según modo
-echo ""
-echo "🔍 CONFIGURACIÓN FIREWALL:"
-case $MODO_SEGURIDAD in
-    "completo")
-        echo "   ✅ ACCESO COMPLETO a red local"
-        echo "   └─ Los clientes pueden acceder a TODOS los dispositivos 192.168.1.*"
-        ;;
-    "limitado")
-        echo "   ✅ ACCESO LIMITADO a servicios específicos"
-        echo "   └─ Puertos permitidos: 80, 443 (web), 22 (SSH), 53 (DNS)"
-        echo "   └─ Resto del tráfico a LAN: BLOQUEADO"
-        ;;
-    "solo_internet")
-        echo "   ✅ SOLO ACCESO A INTERNET"
-        echo "   └─ Acceso a red local: COMPLETAMENTE BLOQUEADO"
-        echo "   └─ Solo pueden salir a internet"
-        ;;
-esac
 
 # Verificar archivos
 echo ""
 echo "📄 ARCHIVOS GENERADOS:"
 for i in $(seq 1 $NUM_CLIENTES); do
     if [ -f "/etc/openvpn/clients/client$i.ovpn" ]; then
-        echo "   ✅ client$i.ovpn: PERSISTENTE"
+        echo "   ✅ client$i.ovpn: PERSISTENTE (/etc/openvpn/clients/)"
     else
         echo "   ❌ client$i.ovpn: FALTANTE"
     fi
@@ -566,49 +353,28 @@ echo "🖥️ INFORMACIÓN DEL SERVIDOR:"
 echo "   ┌─ Dominio: $DDNS_SERVER"
 echo "   ├─ Puerto: $VPN_PORT"
 echo "   ├─ Protocolo: UDP"
-echo "   ├─ Red VPN: 10.8.0.0/24"
-echo "   ├─ Servidor: 10.8.0.1"
-echo "   └─ DHCP: 10.8.0.100-10.8.0.249"
+echo "   └─ Bridge: br-vpn"
 echo ""
-echo "🛡️  CONFIGURACIÓN DE SEGURIDAD:"
-case $MODO_SEGURIDAD in
-    "completo")
-        echo "   🔓 MODO: ACCESO COMPLETO"
-        echo "   └─ Los clientes VPN pueden acceder a:"
-        echo "      ├─ Router Movistar: 192.168.1.1"
-        echo "      ├─ Todos los dispositivos en 192.168.1.*"
-        echo "      ├─ NAS, impresoras, PCs locales"
-        echo "      └─ Todos los servicios de red local"
-        ;;
-    "limitado")
-        echo "   🔐 MODO: ACCESO LIMITADO"
-        echo "   └─ Servicios permitidos:"
-        echo "      ├─ HTTP/HTTPS (puertos 80, 443)"
-        echo "      ├─ SSH (puerto 22)"
-        echo "      ├─ DNS (puerto 53)"
-        echo "      └─ Resto de puertos: BLOQUEADO"
-        ;;
-    "solo_internet")
-        echo "   🛡️  MODO: SOLO INTERNET"
-        echo "   └─ Los clientes SOLO pueden:"
-        echo "      ├─ Acceder a internet"
-        echo "      └─ No pueden ver dispositivos locales"
-        ;;
-esac
+echo "👤 ARCHIVOS DE CLIENTE:"
+echo "   ┌─ Inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   └─ Persistente: /etc/openvpn/clients/"
 echo ""
-echo "👤 CLIENTES CREADOS:"
+echo "📋 RESUMEN DE CLIENTES CREADOS:"
 for i in $(seq 1 $NUM_CLIENTES); do
-    echo "   ├─ client$i (Certificado único)"
+    echo "   └─ client$i.ovpn"
 done
 echo ""
-echo "🔐 CONECTIVIDAD:"
-echo "   ✅ Cada cliente tiene certificado único"
-echo "   ✅ DHCP asignará IPs únicas automáticamente"
-echo "   ✅ Los clientes pueden comunicarse entre sí"
-echo "   ✅ Todos los clientes tienen acceso a internet"
+echo "📥 IMPORTANTE:"
+echo "   • Los archivos en /tmp/ se pierden al reiniciar"
+echo "   • Los archivos en /etc/openvpn/clients/ son permanentes"
+echo "   • Ya has visto el contenido de todos los archivos .ovpn"
+echo ""
 
 echo "----------------------------------------"
-echo "¿Quieres reiniciar ahora? (s/n): "
+echo "¿Quieres reiniciar ahora?"
+echo "Si reinicias, los archivos en /tmp/ se perderán."
+echo ""
+echo "Reiniciar ahora? (s/n): "
 read REINICIAR
 
 if [ "$REINICIAR" = "s" ]; then
@@ -627,9 +393,6 @@ if [ "$REINICIAR" = "s" ]; then
 else
     echo ""
     echo "💡 Sistema mantenido sin reiniciar"
-    echo "📍 Los $NUM_CLIENTES clientes están listos para conectar"
-    echo "🛡️  MODO: $DESCRIPCION"
-    echo ""
     echo "📍 Archivos disponibles en:"
     echo "   - /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn (temporal)"
     echo "   - /etc/openvpn/clients/ (persistente)"
