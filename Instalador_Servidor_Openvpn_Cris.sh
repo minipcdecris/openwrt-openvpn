@@ -219,12 +219,17 @@ uci set network.vpn.device='br-vpn'
 uci commit network > /dev/null 2>&1
 echo "   [DONE] Configuración persistente aplicada"
 
-# 7. GENERAR ARCHIVOS CLIENTE
-echo "📄 PASO 7: GENERANDO ARCHIVOS CLIENTE..."
-echo "--------------------------------------"
+# 7. GENERAR Y MOSTRAR ARCHIVOS CLIENTE
+echo "📄 PASO 7: GENERANDO Y MOSTRANDO ARCHIVOS CLIENTE..."
+echo "--------------------------------------------------"
+mkdir -p /etc/openvpn/clients
+
 for i in $(seq 1 $NUM_CLIENTES); do
+    echo ""
     echo "   [....] Generando client$i.ovpn..."
-    cat > /etc/openvpn/client$i.ovpn << OVPN
+    
+    # Crear el archivo .ovpn
+    cat > /etc/openvpn/clients/client$i.ovpn << OVPN
 client
 dev tap
 proto udp
@@ -246,11 +251,26 @@ $(cat /etc/easy-rsa/pki/private/client$i.key)
 </key>
 OVPN
     
-    cp /etc/openvpn/client$i.ovpn /tmp/client$i.ovpn
+    # Copiar también a /tmp/ para fácil acceso inmediato
+    cp /etc/openvpn/clients/client$i.ovpn /tmp/client$i.ovpn
     echo "   [DONE] client$i.ovpn generado"
+    
+    # Mostrar el contenido del archivo
+    echo ""
+    echo "   ================================================="
+    echo "   📋 CONTENIDO DE client$i.ovpn:"
+    echo "   ================================================="
+    cat /etc/openvpn/clients/client$i.ovpn
+    echo "   ================================================="
+    echo ""
+    echo "   💡 Puedes copiar el contenido anterior ahora"
+    echo "   ⏸️  Pausa... Presiona ENTER para continuar con el siguiente cliente"
+    read
 done
 
-echo "✅ Todos los archivos .ovpn generados en /tmp/"
+echo "✅ Todos los archivos .ovpn generados y mostrados"
+echo "   📍 Acceso inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   📍 Acceso persistente: /etc/openvpn/clients/"
 echo ""
 
 # 8. INICIAR SERVICIOS
@@ -315,8 +335,8 @@ fi
 echo ""
 echo "📄 ARCHIVOS GENERADOS:"
 for i in $(seq 1 $NUM_CLIENTES); do
-    if [ -f "/tmp/client$i.ovpn" ]; then
-        echo "   ✅ client$i.ovpn: EXISTE"
+    if [ -f "/etc/openvpn/clients/client$i.ovpn" ]; then
+        echo "   ✅ client$i.ovpn: PERSISTENTE (/etc/openvpn/clients/)"
     else
         echo "   ❌ client$i.ovpn: FALTANTE"
     fi
@@ -336,24 +356,46 @@ echo "   ├─ Protocolo: UDP"
 echo "   └─ Bridge: br-vpn"
 echo ""
 echo "👤 ARCHIVOS DE CLIENTE:"
-echo "   └─ Ruta: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   ┌─ Inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   └─ Persistente: /etc/openvpn/clients/"
+echo ""
+echo "📋 RESUMEN DE CLIENTES CREADOS:"
+for i in $(seq 1 $NUM_CLIENTES); do
+    echo "   └─ client$i.ovpn"
+done
 echo ""
 echo "📥 IMPORTANTE:"
-echo "   • Descarga los archivos .ovpn de /tmp/ antes de reiniciar"
-echo "   • Configura el firewall si necesitas acceso a la red local"
+echo "   • Los archivos en /tmp/ se pierden al reiniciar"
+echo "   • Los archivos en /etc/openvpn/clients/ son permanentes"
+echo "   • Ya has visto el contenido de todos los archivos .ovpn"
 echo ""
 
 echo "----------------------------------------"
-echo "El sistema se reiniciará en 15 segundos..."
-echo "Presiona Ctrl+C para cancelar el reinicio"
-echo "----------------------------------------"
-
-for i in 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1; do
-    echo -n "Reiniciando en $i segundos... "
-    sleep 1
-    echo -ne "\r"
-done
-
+echo "¿Quieres reiniciar ahora?"
+echo "Si reinicias, los archivos en /tmp/ se perderán."
 echo ""
-echo "🔹 Reiniciando sistema..."
-reboot
+echo "Reiniciar ahora? (s/n): "
+read REINICIAR
+
+if [ "$REINICIAR" = "s" ]; then
+    echo "El sistema se reiniciará en 10 segundos..."
+    echo "Presiona Ctrl+C para cancelar"
+    
+    for i in 10 9 8 7 6 5 4 3 2 1; do
+        echo -n "Reiniciando en $i segundos... "
+        sleep 1
+        echo -ne "\r"
+    done
+    
+    echo ""
+    echo "🔹 Reiniciando sistema..."
+    reboot
+else
+    echo ""
+    echo "💡 Sistema mantenido sin reiniciar"
+    echo "📍 Archivos disponibles en:"
+    echo "   - /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn (temporal)"
+    echo "   - /etc/openvpn/clients/ (persistente)"
+    echo ""
+    echo "🔹 Recuerda reiniciar manualmente más tarde"
+fi
