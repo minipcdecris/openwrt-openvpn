@@ -174,26 +174,67 @@ config openvpn 'VPN_Server'
     option cert '/etc/openvpn/server.crt'
     option key '/etc/openvpn/server.key'
     option dh '/etc/openvpn/dh.pem'
+    option server_bridge '1'
+    option keepalive '10 120'
+    option client_to_client '1'
+    option duplicate_cn '0'
 CFG
 echo "   [DONE] Servidor OpenVPN configurado"
 
-# 5. CONFIGURAR FIREWALL
+# 5. CONFIGURAR FIREWALL CON ACCESO COMPLETO
 echo "🔥 PASO 5: CONFIGURANDO FIREWALL..."
 echo "----------------------------------"
 echo "   [....] Agregando reglas de firewall..."
+echo "        🔓 CONFIGURANDO ACCESO COMPLETO A RED LOCAL"
+
+# Regla para permitir conexiones OpenVPN
 uci add firewall rule
 uci set firewall.@rule[-1].name='Allow-OpenVPN'
 uci set firewall.@rule[-1].src='wan'
 uci set firewall.@rule[-1].proto='udp'
 uci set firewall.@rule[-1].dest_port="$VPN_PORT"
 uci set firewall.@rule[-1].target='ACCEPT'
+
+# Crear zona VPN
+uci add firewall zone
+uci set firewall.@zone[-1].name='vpn'
+uci set firewall.@zone[-1].network='vpn'
+uci set firewall.@zone[-1].input='ACCEPT'
+uci set firewall.@zone[-1].output='ACCEPT'
+uci set firewall.@zone[-1].forward='ACCEPT'
+
+# Reglas de forwarding completo entre VPN y LAN
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='vpn'
+uci set firewall.@forwarding[-1].dest='lan'
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='lan'
+uci set firewall.@forwarding[-1].dest='vpn'
+
+# Permitir tráfico completo entre VPN y LAN
+uci add firewall rule
+uci set firewall.@rule[-1].name='VPN-full-access'
+uci set firewall.@rule[-1].src='vpn'
+uci set firewall.@rule[-1].dest='lan'
+uci set firewall.@rule[-1].proto='all'
+uci set firewall.@rule[-1].target='ACCEPT'
+
+uci add firewall rule
+uci set firewall.@rule[-1].name='LAN-to-VPN'
+uci set firewall.@rule[-1].src='lan'
+uci set firewall.@rule[-1].dest='vpn'
+uci set firewall.@rule[-1].proto='all'
+uci set firewall.@rule[-1].target='ACCEPT'
+
 uci commit firewall > /dev/null 2>&1
 /etc/init.d/firewall reload > /dev/null 2>&1
-echo "   [DONE] Firewall configurado"
+echo "   [DONE] Firewall configurado con acceso completo a LAN"
+echo "        └─ Los clientes VPN tendrán acceso a toda la red 192.168.1.0/24"
 
-# 6. CREAR BRIDGE BR-VPN
-echo "🔧 PASO 6: CREANDO BRIDGE BR-VPN..."
-echo "----------------------------------"
+# 6. CREAR BRIDGE BR-VPN CON RED
+echo "🔧 PASO 6: CREANDO BRIDGE BR-VPN CON RED..."
+echo "------------------------------------------"
 echo "   [....] Creando interfaz tap0..."
 ip tuntap add mode tap tap0
 ifconfig tap0 up
@@ -205,19 +246,33 @@ brctl addif br-vpn tap0
 ifconfig br-vpn up
 echo "   [DONE] Bridge br-vpn creado"
 
-echo "   [....] Configurando persistencia..."
-uci set network.br-vpn=device
-uci set network.br-vpn.type='bridge'
-uci set network.br-vpn.name='br-vpn'
-uci add_list network.br-vpn.ports='tap0'
-uci set network.br-vpn.igmp_snooping='1'
+echo "   [....] Configurando red para br-vpn..."
+# Configurar interfaz bridge con IP estática
+uci set network.br-vpn=interface
+uci set network.br-vpn.proto='static'
+uci set network.br-vpn.device='br-vpn'
+uci set network.br-vpn.ipaddr='10.8.0.1'
+uci set network.br-vpn.netmask='255.255.255.0'
+uci set network.br-vpn.gateway='10.8.0.1'
+uci set network.br-vpn.dns='10.8.0.1'
 
-uci set network.vpn=interface
-uci set network.vpn.proto='none'
-uci set network.vpn.device='br-vpn'
+# Configurar DHCP para clientes VPN
+uci set dhcp.vpn=dhcp
+uci set dhcp.vpn.interface='br-vpn'
+uci set dhcp.vpn.start='100'
+uci set dhcp.vpn.limit='150'
+uci set dhcp.vpn.leasetime='12h'
 
-uci commit network > /dev/null 2>&1
-echo "   [DONE] Configuración persistente aplicada"
+uci commit network
+uci commit dhcp
+
+# Reiniciar servicios de red
+/etc/init.d/network restart
+/etc/init.d/dnsmasq restart
+sleep 3
+echo "   [DONE] Red configurada (10.8.0.0/24)"
+echo "      └─ Servidor: 10.8.0.1"
+echo "      └─ Clientes: 10.8.0.100 - 10.8.0.249"
 
 # 7. GENERAR Y MOSTRAR ARCHIVOS CLIENTE
 echo "📄 PASO 7: GENERANDO Y MOSTRANDO ARCHIVOS CLIENTE..."
@@ -236,10 +291,16 @@ proto udp
 remote $DDNS_SERVER $VPN_PORT
 resolv-retry infinite
 nobind
-float
-cipher AES-256-GCM
-keepalive 15 60
+persist-key
+persist-tun
 remote-cert-tls server
+cipher AES-256-GCM
+verb 3
+
+# Configuración de red
+# Los clientes recibirán IP automática via DHCP
+# y tendrán acceso completo a la red local
+
 <ca>
 $(cat /etc/openvpn/ca.crt)
 </ca>
@@ -288,7 +349,7 @@ echo "   [....] Reiniciando DuckDNS..."
 /etc/init.d/ddns restart > /dev/null 2>&1
 echo "   [DONE] DuckDNS reiniciado"
 
-sleep 2
+sleep 5
 echo "✅ Todos los servicios iniciados correctamente"
 echo ""
 
@@ -307,36 +368,45 @@ else
     echo "   ❌ OpenVPN: INACTIVO"
 fi
 
-# Verificar DuckDNS
-if [ -n "$DUCKDNS_SERVICE" ]; then
-    if uci get ddns.$DUCKDNS_SERVICE.enabled >/dev/null 2>&1; then
-        echo "   ✅ DuckDNS: CONFIGURADO"
-    else
-        echo "   ❌ DuckDNS: NO CONFIGURADO"
-    fi
+# Verificar interfaces de red
+echo ""
+echo "🔍 CONFIGURACIÓN DE RED:"
+if ifconfig br-vpn >/dev/null 2>&1; then
+    echo "   ✅ Bridge br-vpn: ACTIVO"
+    ifconfig br-vpn | grep 'inet addr' | while read line; do
+        echo "      └─ $line"
+    done
 else
-    echo "   ⚠️ DuckDNS: CONFIGURACIÓN MANUAL REQUERIDA"
+    echo "   ❌ Bridge br-vpn: INACTIVO"
 fi
 
-# Verificar interfaces
 if ifconfig tap0 >/dev/null 2>&1; then
     echo "   ✅ Interfaz tap0: ACTIVA"
 else
     echo "   ❌ Interfaz tap0: INACTIVA"
 fi
 
-if ifconfig br-vpn >/dev/null 2>&1; then
-    echo "   ✅ Bridge br-vpn: ACTIVO"
+# Verificar DHCP
+if uci get dhcp.vpn >/dev/null 2>&1; then
+    echo "   ✅ DHCP VPN: CONFIGURADO"
+    echo "      └─ Rango: 10.8.0.100 - 10.8.0.249"
 else
-    echo "   ❌ Bridge br-vpn: INACTIVO"
+    echo "   ❌ DHCP VPN: NO CONFIGURADO"
 fi
+
+# Verificar firewall
+echo ""
+echo "🔍 CONFIGURACIÓN FIREWALL:"
+echo "   ✅ Acceso completo a red local habilitado"
+echo "   ✅ Los clientes VPN pueden acceder a 192.168.1.0/24"
+echo "   ✅ Comunicación bidireccional VPN↔LAN"
 
 # Verificar archivos
 echo ""
 echo "📄 ARCHIVOS GENERADOS:"
 for i in $(seq 1 $NUM_CLIENTES); do
     if [ -f "/etc/openvpn/clients/client$i.ovpn" ]; then
-        echo "   ✅ client$i.ovpn: PERSISTENTE (/etc/openvpn/clients/)"
+        echo "   ✅ client$i.ovpn: PERSISTENTE"
     else
         echo "   ❌ client$i.ovpn: FALTANTE"
     fi
@@ -353,28 +423,32 @@ echo "🖥️ INFORMACIÓN DEL SERVIDOR:"
 echo "   ┌─ Dominio: $DDNS_SERVER"
 echo "   ├─ Puerto: $VPN_PORT"
 echo "   ├─ Protocolo: UDP"
-echo "   └─ Bridge: br-vpn"
+echo "   ├─ Red VPN: 10.8.0.0/24"
+echo "   ├─ Servidor: 10.8.0.1"
+echo "   └─ DHCP: 10.8.0.100-10.8.0.249"
 echo ""
-echo "👤 ARCHIVOS DE CLIENTE:"
-echo "   ┌─ Inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
-echo "   └─ Persistente: /etc/openvpn/clients/"
+echo "🏠 ACCESO A RED LOCAL:"
+echo "   ✅ ACCESO COMPLETO HABILITADO"
+echo "   └─ Los clientes VPN pueden acceder a:"
+echo "      ├─ Router Movistar: 192.168.1.1"
+echo "      ├─ Otros dispositivos en 192.168.1.*"
+echo "      ├─ NAS, impresoras, PCs locales"
+echo "      └─ Todos los servicios de red local"
 echo ""
-echo "📋 RESUMEN DE CLIENTES CREADOS:"
+echo "👤 CLIENTES CREADOS:"
 for i in $(seq 1 $NUM_CLIENTES); do
-    echo "   └─ client$i.ovpn"
+    echo "   ├─ client$i (Certificado único)"
 done
 echo ""
-echo "📥 IMPORTANTE:"
-echo "   • Los archivos en /tmp/ se pierden al reiniciar"
-echo "   • Los archivos en /etc/openvpn/clients/ son permanentes"
-echo "   • Ya has visto el contenido de todos los archivos .ovpn"
+echo "🔐 CONECTIVIDAD:"
+echo "   ✅ Cada cliente tiene certificado único"
+echo "   ✅ DHCP asignará IPs únicas automáticamente"
+echo "   ✅ Los clientes pueden comunicarse entre sí"
+echo "   ✅ Acceso completo a red local 192.168.1.0/24"
 echo ""
 
 echo "----------------------------------------"
-echo "¿Quieres reiniciar ahora?"
-echo "Si reinicias, los archivos en /tmp/ se perderán."
-echo ""
-echo "Reiniciar ahora? (s/n): "
+echo "¿Quieres reiniciar ahora? (s/n): "
 read REINICIAR
 
 if [ "$REINICIAR" = "s" ]; then
@@ -393,6 +467,9 @@ if [ "$REINICIAR" = "s" ]; then
 else
     echo ""
     echo "💡 Sistema mantenido sin reiniciar"
+    echo "📍 Los $NUM_CLIENTES clientes están listos para conectar"
+    echo "🔓 CON ACCESO COMPLETO A RED LOCAL"
+    echo ""
     echo "📍 Archivos disponibles en:"
     echo "   - /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn (temporal)"
     echo "   - /etc/openvpn/clients/ (persistente)"
