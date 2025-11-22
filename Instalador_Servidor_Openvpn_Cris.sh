@@ -3,7 +3,7 @@
 echo ""
 echo "================================================"
 echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
-echo "       BR-VPN + DUCKDNS EDITABLE"
+echo "       BR-VPN + DUCKDNS EDITABLE de CRIS"
 echo "================================================"
 echo ""
 
@@ -230,21 +230,27 @@ echo "🔥 PASO 5: CONFIGURANDO FIREWALL..."
 echo "----------------------------------"
 echo "   [....] Configurando modo: $DESCRIPCION"
 
+# Limpiar configuraciones previas si existen
+uci delete firewall.Allow_OpenVPN 2>/dev/null
+uci delete firewall.vpn 2>/dev/null
+uci delete firewall.VPN_full_access 2>/dev/null
+uci delete firewall.LAN_to_VPN 2>/dev/null
+
 # Regla básica para permitir conexiones OpenVPN
-uci add firewall rule
-uci set firewall.@rule[-1].name='Allow-OpenVPN'
-uci set firewall.@rule[-1].src='wan'
-uci set firewall.@rule[-1].proto='udp'
-uci set firewall.@rule[-1].dest_port="$VPN_PORT"
-uci set firewall.@rule[-1].target='ACCEPT'
+uci set firewall.Allow_OpenVPN=rule
+uci set firewall.Allow_OpenVPN.name='Allow-OpenVPN'
+uci set firewall.Allow_OpenVPN.src='wan'
+uci set firewall.Allow_OpenVPN.proto='udp'
+uci set firewall.Allow_OpenVPN.dest_port="$VPN_PORT"
+uci set firewall.Allow_OpenVPN.target='ACCEPT'
 
 # Crear zona VPN
-uci add firewall zone
-uci set firewall.@zone[-1].name='vpn'
-uci set firewall.@zone[-1].network='vpn'
-uci set firewall.@zone[-1].input='ACCEPT'
-uci set firewall.@zone[-1].output='ACCEPT'
-uci set firewall.@zone[-1].forward='ACCEPT'
+uci set firewall.vpn=zone
+uci set firewall.vpn.name='vpn'
+uci set firewall.vpn.network='vpn'
+uci set firewall.vpn.input='ACCEPT'
+uci set firewall.vpn.output='ACCEPT'
+uci set firewall.vpn.forward='ACCEPT'
 
 # Configurar según el modo de seguridad seleccionado
 case $MODO_SEGURIDAD in
@@ -253,28 +259,28 @@ case $MODO_SEGURIDAD in
         echo "        🔓 CONFIGURANDO ACCESO COMPLETO A RED LOCAL"
         
         # Reglas de forwarding completo entre VPN y LAN
-        uci add firewall forwarding
-        uci set firewall.@forwarding[-1].src='vpn'
-        uci set firewall.@forwarding[-1].dest='lan'
+        uci set firewall.vpn_lan=forwarding
+        uci set firewall.vpn_lan.src='vpn'
+        uci set firewall.vpn_lan.dest='lan'
 
-        uci add firewall forwarding
-        uci set firewall.@forwarding[-1].src='lan'
-        uci set firewall.@forwarding[-1].dest='vpn'
+        uci set firewall.lan_vpn=forwarding
+        uci set firewall.lan_vpn.src='lan'
+        uci set firewall.lan_vpn.dest='vpn'
 
         # Permitir tráfico completo entre VPN y LAN
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='VPN-full-access'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='lan'
-        uci set firewall.@rule[-1].proto='all'
-        uci set firewall.@rule[-1].target='ACCEPT'
+        uci set firewall.VPN_full_access=rule
+        uci set firewall.VPN_full_access.name='VPN-full-access'
+        uci set firewall.VPN_full_access.src='vpn'
+        uci set firewall.VPN_full_access.dest='lan'
+        uci set firewall.VPN_full_access.proto='all'
+        uci set firewall.VPN_full_access.target='ACCEPT'
 
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='LAN-to-VPN'
-        uci set firewall.@rule[-1].src='lan'
-        uci set firewall.@rule[-1].dest='vpn'
-        uci set firewall.@rule[-1].proto='all'
-        uci set firewall.@rule[-1].target='ACCEPT'
+        uci set firewall.LAN_to_VPN=rule
+        uci set firewall.LAN_to_VPN.name='LAN-to-VPN'
+        uci set firewall.LAN_to_VPN.src='lan'
+        uci set firewall.LAN_to_VPN.dest='vpn'
+        uci set firewall.LAN_to_VPN.proto='all'
+        uci set firewall.LAN_to_VPN.target='ACCEPT'
         ;;
 
     "limitado")
@@ -283,37 +289,37 @@ case $MODO_SEGURIDAD in
         
         # NO forwarding automático - control manual con reglas
         # Permitir solo puertos específicos de LAN a VPN
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='VPN-to-LAN-web'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='lan'
-        uci set firewall.@rule[-1].proto='tcp'
-        uci set firewall.@rule[-1].dest_port='80 443'  # HTTP/HTTPS
-        uci set firewall.@rule[-1].target='ACCEPT'
+        uci set firewall.VPN_to_LAN_web=rule
+        uci set firewall.VPN_to_LAN_web.name='VPN-to-LAN-web'
+        uci set firewall.VPN_to_LAN_web.src='vpn'
+        uci set firewall.VPN_to_LAN_web.dest='lan'
+        uci set firewall.VPN_to_LAN_web.proto='tcp'
+        uci set firewall.VPN_to_LAN_web.dest_port='80 443'  # HTTP/HTTPS
+        uci set firewall.VPN_to_LAN_web.target='ACCEPT'
 
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='VPN-to-LAN-ssh'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='lan'
-        uci set firewall.@rule[-1].proto='tcp'
-        uci set firewall.@rule[-1].dest_port='22'       # SSH
-        uci set firewall.@rule[-1].target='ACCEPT'
+        uci set firewall.VPN_to_LAN_ssh=rule
+        uci set firewall.VPN_to_LAN_ssh.name='VPN-to-LAN-ssh'
+        uci set firewall.VPN_to_LAN_ssh.src='vpn'
+        uci set firewall.VPN_to_LAN_ssh.dest='lan'
+        uci set firewall.VPN_to_LAN_ssh.proto='tcp'
+        uci set firewall.VPN_to_LAN_ssh.dest_port='22'       # SSH
+        uci set firewall.VPN_to_LAN_ssh.target='ACCEPT'
 
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='VPN-to-LAN-dns'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='lan'
-        uci set firewall.@rule[-1].proto='udp'
-        uci set firewall.@rule[-1].dest_port='53'       # DNS
-        uci set firewall.@rule[-1].target='ACCEPT'
+        uci set firewall.VPN_to_LAN_dns=rule
+        uci set firewall.VPN_to_LAN_dns.name='VPN-to-LAN-dns'
+        uci set firewall.VPN_to_LAN_dns.src='vpn'
+        uci set firewall.VPN_to_LAN_dns.dest='lan'
+        uci set firewall.VPN_to_Lan_dns.proto='udp'
+        uci set firewall.VPN_to_LAN_dns.dest_port='53'       # DNS
+        uci set firewall.VPN_to_LAN_dns.target='ACCEPT'
 
         # Denegar el resto del tráfico a LAN
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='Block-VPN-to-LAN'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='lan'
-        uci set firewall.@rule[-1].proto='all'
-        uci set firewall.@rule[-1].target='REJECT'
+        uci set firewall.Block_VPN_to_LAN=rule
+        uci set firewall.Block_VPN_to_LAN.name='Block-VPN-to-LAN'
+        uci set firewall.Block_VPN_to_LAN.src='vpn'
+        uci set firewall.Block_VPN_to_LAN.dest='lan'
+        uci set firewall.Block_VPN_to_LAN.proto='all'
+        uci set firewall.Block_VPN_to_LAN.target='REJECT'
         ;;
 
     "solo_internet")
@@ -321,62 +327,70 @@ case $MODO_SEGURIDAD in
         echo "        🛡️ CONFIGURANDO SOLO ACCESO A INTERNET"
         
         # Permitir solo salida a internet (WAN)
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='VPN-to-WAN'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='wan'
-        uci set firewall.@rule[-1].proto='all'
-        uci set firewall.@rule[-1].target='ACCEPT'
+        uci set firewall.VPN_to_WAN=rule
+        uci set firewall.VPN_to_WAN.name='VPN-to-WAN'
+        uci set firewall.VPN_to_WAN.src='vpn'
+        uci set firewall.VPN_to_WAN.dest='wan'
+        uci set firewall.VPN_to_WAN.proto='all'
+        uci set firewall.VPN_to_WAN.target='ACCEPT'
 
         # Denegar acceso a LAN
-        uci add firewall rule
-        uci set firewall.@rule[-1].name='Block-VPN-to-LAN'
-        uci set firewall.@rule[-1].src='vpn'
-        uci set firewall.@rule[-1].dest='lan'
-        uci set firewall.@rule[-1].proto='all'
-        uci set firewall.@rule[-1].target='REJECT'
+        uci set firewall.Block_VPN_to_LAN=rule
+        uci set firewall.Block_VPN_to_LAN.name='Block-VPN-to-LAN'
+        uci set firewall.Block_VPN_to_LAN.src='vpn'
+        uci set firewall.Block_VPN_to_LAN.dest='lan'
+        uci set firewall.Block_VPN_to_LAN.proto='all'
+        uci set firewall.Block_VPN_to_LAN.target='REJECT'
         ;;
 esac
 
 # Permitir siempre internet para clientes VPN
-uci add firewall rule
-uci set firewall.@rule[-1].name='VPN-to-Internet'
-uci set firewall.@rule[-1].src='vpn'
-uci set firewall.@rule[-1].dest='wan'
-uci set firewall.@rule[-1].proto='all'
-uci set firewall.@rule[-1].target='ACCEPT'
+uci set firewall.VPN_to_Internet=rule
+uci set firewall.VPN_to_Internet.name='VPN-to-Internet'
+uci set firewall.VPN_to_Internet.src='vpn'
+uci set firewall.VPN_to_Internet.dest='wan'
+uci set firewall.VPN_to_Internet.proto='all'
+uci set firewall.VPN_to_Internet.target='ACCEPT'
 
 uci commit firewall > /dev/null 2>&1
 /etc/init.d/firewall reload > /dev/null 2>&1
 echo "   [DONE] Firewall configurado - $DESCRIPCION"
 
-# 6. CREAR BRIDGE BR-VPN CON RED
+# 6. CREAR BRIDGE BR-VPN CON RED (VERSIÓN CORREGIDA)
 echo "🔧 PASO 6: CREANDO BRIDGE BR-VPN CON RED..."
 echo "------------------------------------------"
 echo "   [....] Creando interfaz tap0..."
-ip tuntap add mode tap tap0
-ifconfig tap0 up
+ip tuntap add mode tap tap0 2>/dev/null
+ifconfig tap0 up 2>/dev/null
 echo "   [DONE] Interfaz tap0 creada"
 
 echo "   [....] Creando bridge br-vpn..."
-brctl addbr br-vpn
-brctl addif br-vpn tap0
-ifconfig br-vpn up
+brctl addbr br-vpn 2>/dev/null
+brctl addif br-vpn tap0 2>/dev/null
+ifconfig br-vpn up 2>/dev/null
 echo "   [DONE] Bridge br-vpn creado"
 
 echo "   [....] Configurando red para br-vpn..."
-# Configurar interfaz bridge con IP estática
-uci set network.br-vpn=interface
-uci set network.br-vpn.proto='static'
-uci set network.br-vpn.device='br-vpn'
-uci set network.br-vpn.ipaddr='10.8.0.1'
-uci set network.br-vpn.netmask='255.255.255.0'
-uci set network.br-vpn.gateway='10.8.0.1'
-uci set network.br-vpn.dns='10.8.0.1'
+# Limpiar configuraciones previas
+uci delete network.br-vpn 2>/dev/null
+uci delete network.vpn 2>/dev/null
+uci delete dhcp.vpn 2>/dev/null
+
+# Configurar bridge como dispositivo
+uci set network.br-vpn=device
+uci set network.br-vpn.type='bridge'
+uci set network.br-vpn.name='br-vpn'
+
+# Configurar interfaz para el bridge
+uci set network.vpn=interface
+uci set network.vpn.proto='static'
+uci set network.vpn.device='br-vpn'
+uci set network.vpn.ipaddr='10.8.0.1'
+uci set network.vpn.netmask='255.255.255.0'
 
 # Configurar DHCP para clientes VPN
 uci set dhcp.vpn=dhcp
-uci set dhcp.vpn.interface='br-vpn'
+uci set dhcp.vpn.interface='vpn'
 uci set dhcp.vpn.start='100'
 uci set dhcp.vpn.limit='150'
 uci set dhcp.vpn.leasetime='12h'
@@ -385,9 +399,11 @@ uci commit network
 uci commit dhcp
 
 # Reiniciar servicios de red
+echo "   [....] Aplicando configuración de red..."
 /etc/init.d/network restart
+sleep 5
 /etc/init.d/dnsmasq restart
-sleep 3
+sleep 2
 echo "   [DONE] Red configurada (10.8.0.0/24)"
 echo "      └─ Servidor: 10.8.0.1"
 echo "      └─ Clientes: 10.8.0.100 - 10.8.0.249"
@@ -414,9 +430,6 @@ persist-tun
 remote-cert-tls server
 cipher AES-256-GCM
 verb 3
-
-# Configuración de red
-# Los clientes recibirán IP automática via DHCP
 
 <ca>
 $(cat /etc/openvpn/ca.crt)
