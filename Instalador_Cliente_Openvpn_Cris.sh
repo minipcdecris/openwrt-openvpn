@@ -95,17 +95,14 @@ config openvpn 'VPN_Client'
 EOF
 check_status
 
-# CONFIGURACIÓN CRÍTICA: Router cliente en MISMA red que servidor
-echo "- Configurando router cliente en red 192.168.1.x..."
+# CONFIGURACIÓN SIMPLIFICADA: Sin firewall complicado
+echo "- Configurando red simplificada..."
 
 # Backup de la configuración de red original
 cp /etc/config/network /etc/config/network.backup
 
-# Configurar bridge entre br-lan y tap0 (VPN) en MISMA red
+# Configuración de red básica - SIN ZONAS VPN COMPLEJAS
 cat > /etc/config/network << 'EOF'
-# Configuración para MISMA RED que servidor
-# Los dispositivos LAN estarán en 192.168.1.x
-
 config interface 'loopback'
     option ifname 'lo'
     option proto 'static'
@@ -115,25 +112,24 @@ config interface 'loopback'
 config globals 'globals'
     option ula_prefix 'fd00:ab:cd::/48'
 
-# Bridge principal que incluye LAN y VPN
+# Bridge principal que incluye LAN física
 config device
     option type 'bridge'
     option name 'br-lan'
-    list ports 'eth1'    # Puerto LAN físico
-    list ports 'tap0'    # Interfaz VPN
+    list ports 'eth1'
     option igmp_snooping '1'
 
-# Interfaz LAN con IP FIJA en red del servidor (evitar 192.168.1.1)
+# Interfaz LAN con IP FIJA en red del servidor
 config interface 'lan'
     option device 'br-lan'
     option proto 'static'
-    option ipaddr '192.168.1.200'    # IP FIJA en red servidor
+    option ipaddr '192.168.1.200'
     option netmask '255.255.255.0'
-    option gateway '192.168.1.1'     # Gateway = Router servidor
-    option dns '192.168.1.1'         # DNS = Router servidor
+    option gateway '192.168.1.1'
+    option dns '192.168.1.1'
     option ipv6 '0'
 
-# Interfaz WAN (para conexión a internet del router cliente)
+# Interfaz WAN
 config interface 'wan'
     option ifname 'eth0'
     option proto 'dhcp'
@@ -142,67 +138,70 @@ config interface 'wan'
 config interface 'wan6'
     option ifname 'eth0'
     option proto 'dhcpv6'
+
+# Interfaz VPN separada - NO en el bridge para evitar conflictos
+config interface 'vpn'
+    option ifname 'tap0'
+    option proto 'none'
+    option auto '1'
 EOF
 
 echo -e "${GREEN}- Configuración de red aplicada${NC}"
 
-# DESACTIVAR DHCP LOCAL - usar DHCP del servidor
-echo "- Desactivando DHCP local (usar DHCP del servidor)..."
+# DESACTIVAR DHCP LOCAL
+echo "- Desactivando DHCP local..."
 uci set dhcp.lan.ignore='1'
 uci commit dhcp
 /etc/init.d/dnsmasq stop
 /etc/init.d/dnsmasq disable
-
 echo -e "${GREEN}- DHCP local desactivado${NC}"
 
-# Configurar firewall para permitir tráfico
-echo "- Configurando firewall..."
+# CONFIGURACIÓN FIREWALL MUY SIMPLE - SOLO LO BÁSICO
+echo "- Configurando firewall básico..."
 
-# Limpiar configuraciones previas
+# Limpiar configuraciones problemáticas
 uci delete firewall.vpn 2>/dev/null
+uci delete firewall.VPN_full_access 2>/dev/null
+uci delete firewall.LAN_to_VPN 2>/dev/null
+uci delete firewall.VPN_to_Internet 2>/dev/null
+uci delete firewall.vpn_lan 2>/dev/null
+uci delete firewall.lan_vpn 2>/dev/null
 
-# Configurar zona LAN
-uci set firewall.lan=zone
-uci set firewall.lan.name='lan'
-uci set firewall.lan.network='lan'
-uci set firewall.lan.input='ACCEPT'
-uci set firewall.lan.output='ACCEPT'
-uci set firewall.lan.forward='ACCEPT'
-
-# Permitir tráfico entre LAN y WAN
-uci set firewall.lan_wan=forwarding
-uci set firewall.lan_wan.src='lan'
-uci set firewall.lan_wan.dest='wan'
-
-uci set firewall.wan_lan=forwarding
-uci set firewall.wan_lan.src='wan'
-uci set firewall.wan_lan.dest='lan'
-
-# Regla para OpenVPN
-uci set firewall.allow_vpn=rule
-uci set firewall.allow_vpn.name='Allow-OpenVPN-Client'
-uci set firewall.allow_vpn.src='wan'
-uci set firewall.allow_vpn.proto='udp'
-uci set firewall.allow_vpn.dest_port="$VPN_PORT"
-uci set firewall.allow_vpn.target='ACCEPT'
+# Solo regla básica para permitir OpenVPN
+uci delete firewall.Allow_OpenVPN 2>/dev/null
+uci set firewall.Allow_OpenVPN=rule
+uci set firewall.Allow_OpenVPN.name='Allow-OpenVPN-Client'
+uci set firewall.Allow_OpenVPN.src='wan'
+uci set firewall.Allow_OpenVPN.proto='udp'
+uci set firewall.Allow_OpenVPN.dest_port="$VPN_PORT"
+uci set firewall.Allow_OpenVPN.target='ACCEPT'
 
 uci commit firewall
 /etc/init.d/firewall reload
+echo -e "${GREEN}- Firewall básico configurado${NC}"
 
-echo -e "${GREEN}- Firewall configurado${NC}"
-
-# Configurar rutas estáticas si es necesario
-echo "- Configurando rutas..."
-cat > /etc/hotplug.d/iface/99-openvpn-routes << 'EOF'
+# Script para configurar rutas después de que OpenVPN se conecte
+echo "- Configurando rutas automáticas..."
+cat > /etc/openvpn/up.sh << 'EOF'
 #!/bin/sh
-[ "$ACTION" = "ifup" -a "$INTERFACE" = "lan" ] && {
-    sleep 10
-    # Agregar rutas si es necesario
-    ip route add 192.168.1.0/24 dev br-lan scope link 2>/dev/null
-}
+# Script que se ejecuta cuando OpenVPN se conecta
+
+sleep 5
+
+# Agregar ruta para la red del servidor
+ip route add 192.168.1.0/24 dev tap0 2>/dev/null
+
+# Agregar tap0 al bridge br-lan PARA BRIDGE REAL
+brctl addif br-lan tap0 2>/dev/null
+
+echo "OpenVPN conectado - Rutas configuradas"
 EOF
 
-chmod +x /etc/hotplug.d/iface/99-openvpn-routes
+chmod +x /etc/openvpn/up.sh
+
+# Configurar OpenVPN para usar el script de conexión
+echo "script-security 2" >> /etc/openvpn/client.ovpn
+echo "up /etc/openvpn/up.sh" >> /etc/openvpn/client.ovpn
 
 # Habilitar y iniciar servicios
 echo "- Iniciando servicios..."
@@ -226,16 +225,10 @@ echo -e "${GREEN}- Router cliente en MISMA RED 192.168.1.x${NC}"
 echo -e "\n${YELLOW}=== MODO DE FUNCIONAMIENTO ===${NC}"
 echo -e "${YELLOW}- Este router está en la MISMA red que el servidor${NC}"
 echo -e "${YELLOW}- Dispositivos conectados por LAN/WiFi:${NC}"
-echo -e "${YELLOW}  • Recibirán IP del SERVVIDOR (192.168.1.x) ✓${NC}"
+echo -e "${YELLOW}  • Recibirán IP del SERVIDOR (192.168.1.x) ✓${NC}"
 echo -e "${YELLOW}  • Estarán en MISMA red 192.168.1.x ✓${NC}"
 echo -e "${YELLOW}  • El decodificador será 192.168.1.x ✓${NC}"
-echo -e "${YELLOW}  • Como si estuviera conectado DIRECTAMENTE al servidor ✓${NC}"
-
-echo -e "\n${CYAN}=== CONFIGURACIÓN DE RED ===${NC}"
-echo -e "${CYAN}✓ Router cliente: 192.168.1.200 (IP fija)${NC}"
-echo -e "${CYAN}✓ Dispositivos: 192.168.1.x (DHCP del servidor)${NC}"
-echo -e "${CYAN}✓ Gateway: 192.168.1.1 (Router servidor)${NC}"
-echo -e "${CYAN}✓ DNS: 192.168.1.1 (Router servidor)${NC}"
+echo -e "${YELLOW}  • Como conectado DIRECTAMENTE al servidor ✓${NC}"
 
 # Verificar conexión
 echo -e "\n- Verificando conexión..."
@@ -243,6 +236,13 @@ sleep 15
 
 if pgrep openvpn >/dev/null; then
     echo -e "${GREEN}- Proceso OpenVPN ejecutándose ✓${NC}"
+    
+    # Verificar si tap0 está en el bridge
+    if brctl show br-lan | grep -q tap0; then
+        echo -e "${GREEN}- VPN integrada en bridge LAN ✓${NC}"
+    else
+        echo -e "${YELLOW}- VPN no integrada en bridge aún${NC}"
+    fi
 else
     echo -e "${RED}- Error: OpenVPN no se está ejecutando${NC}"
 fi
@@ -260,13 +260,15 @@ fi
 echo -e "\n- Probando conectividad con servidor..."
 if ping -c 2 192.168.1.1 >/dev/null 2>&1; then
     echo -e "${GREEN}- Conexión con servidor (192.168.1.1) OK ✓${NC}"
+    
+    # Probar si podemos acceder a la red local
+    echo "- Probando acceso a red local..."
+    if ping -c 2 192.168.1.200 >/dev/null 2>&1; then
+        echo -e "${GREEN}- Conexión local OK ✓${NC}"
+    fi
 else
     echo -e "${YELLOW}- No se puede alcanzar el servidor aún${NC}"
-fi
-
-# Probar conectividad local
-if ping -c 2 192.168.1.200 >/dev/null 2>&1; then
-    echo -e "${GREEN}- Conexión local OK ✓${NC}"
+    echo -e "${YELLOW}- Esto es normal hasta que OpenVPN se conecte completamente${NC}"
 fi
 
 echo -e "\n${GREEN}=== ¡CONFIGURACIÓN EXITOSA! ===${NC}"
@@ -274,17 +276,15 @@ echo -e "${GREEN}- El decodificador de Movistar:${NC}"
 echo -e "${GREEN}  • Recibirá IP: 192.168.1.x (DEL SERVIDOR) ✓${NC}"
 echo -e "${GREEN}  • Estará en MISMA red que servidor ✓${NC}"
 echo -e "${GREEN}  • Como conectado DIRECTAMENTE allí ✓${NC}"
-echo -e "${GREEN}  • Verá todos los dispositivos 192.168.1.* ✓${NC}"
 
-# Instrucciones finales
-echo -e "\n${YELLOW}=== INSTRUCCIONES ===${NC}"
-echo -e "${YELLOW}1. Conecta el decodificador al router cliente${NC}"
-echo -e "${YELLOW}2. El decodificador recibirá IP del servidor: 192.168.1.x${NC}"
-echo -e "${YELLOW}3. Estará en la MISMA red que el servidor${NC}"
-echo -e "${YELLOW}4. Funcionará como si estuviera en casa del servidor ✓${NC}"
+# Instrucciones de diagnóstico
+echo -e "\n${YELLOW}=== SI HAY PROBLEMAS ===${NC}"
+echo -e "${YELLOW}- Ver logs: logread | grep openvpn${NC}"
+echo -e "${YELLOW}- Ver estado: cat /tmp/openvpn-status.log${NC}"
+echo -e "${YELLOW}- Reiniciar OpenVPN: /etc/init.d/openvpn restart${NC}"
 
 # Preguntar por reinicio
-echo -e "\n- ¿Reiniciar router para aplicar todos los cambios? (s/n): "
+echo -e "\n- ¿Reiniciar router para aplicar cambios? (s/n): "
 read -r response
 if [ "$response" = "s" ] || [ "$response" = "S" ]; then
     echo "- Reiniciando en 10 segundos (Ctrl+C para cancelar)..."
@@ -296,6 +296,6 @@ if [ "$response" = "s" ] || [ "$response" = "S" ]; then
     echo "- Reiniciando sistema..."
     reboot
 else
+    echo -e "${YELLOW}- Algunos cambios pueden requerir reinicio${NC}"
     echo -e "${YELLOW}- Reinicia manualmente más tarde con: reboot${NC}"
 fi
-
