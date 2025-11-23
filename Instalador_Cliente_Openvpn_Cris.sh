@@ -8,12 +8,10 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Mostrar información
-echo -e "${CYAN}=== CONFIGURACIÓN CLIENTE OPENVPN (MISMA RED SERVIDOR) ===${NC}"
-echo -e "${CYAN}=== Los dispositivos estarán en MISMA red 192.168.1.x ===${NC}"
+echo -e "${CYAN}=== CONFIGURACIÓN CLIENTE OPENVPN (SIN REINICIOS) ===${NC}"
 
 # Pedir el DDNS del servidor
 echo -e "${YELLOW}- Introduce el DDNS o IP de tu servidor OpenVPN:${NC}"
-echo -e "${YELLOW}- Ejemplo: campeon19.duckdns.org${NC}"
 read -p "DDNS o IP del servidor: " DDNS_SERVER
 
 if [ -z "$DDNS_SERVER" ]; then
@@ -21,28 +19,19 @@ if [ -z "$DDNS_SERVER" ]; then
     exit 1
 fi
 
-# Pedir el puerto (opcional, por defecto 1194)
-echo -e "${YELLOW}- Introduce el puerto del servidor (Enter para 1194):${NC}"
-read -p "Puerto: " VPN_PORT
+# Pedir el puerto
+read -p "Puerto (Enter para 1194): " VPN_PORT
 VPN_PORT=${VPN_PORT:-1194}
 
 echo -e "${GREEN}- Configurando conexión a: $DDNS_SERVER:$VPN_PORT${NC}"
 
-# Actualizar la lista de paquetes
-echo "- Actualizando lista de paquetes..."
-opkg update
-
-# Instalar OpenVPN
+# Instalar OpenVPN sin reinicios
 echo "- Instalando OpenVPN..."
+opkg update
 opkg install openvpn-openssl
 
 # Preguntar por el archivo .ovpn
-echo -e "\n${YELLOW}=== CONFIGURACIÓN ARCHIVO .ovpn ===${NC}"
-echo -e "${YELLOW}- Pega el contenido completo del archivo .ovpn:${NC}"
-echo -e "${YELLOW}- (Termina con Ctrl+D en una línea vacía)${NC}"
-
-# Leer el contenido .ovpn
-echo "- Pegando contenido .ovpn (Ctrl+D cuando termines):"
+echo -e "\n${YELLOW}- Pega el contenido del archivo .ovpn (Ctrl+D cuando termines):${NC}"
 USER_OVPN_CONTENT=$(cat)
 
 if [ -z "$USER_OVPN_CONTENT" ]; then
@@ -50,8 +39,8 @@ if [ -z "$USER_OVPN_CONTENT" ]; then
     exit 1
 fi
 
-# Crear el archivo .ovpn
-echo "- Creando archivo de configuración OpenVPN..."
+# Crear archivo .ovpn
+echo "- Creando configuración OpenVPN..."
 cat > /etc/openvpn/client.ovpn << EOF
 # Configuración OpenVPN Cliente
 # Servidor: $DDNS_SERVER:$VPN_PORT
@@ -59,55 +48,69 @@ cat > /etc/openvpn/client.ovpn << EOF
 $USER_OVPN_CONTENT
 
 remote $DDNS_SERVER $VPN_PORT
+resolv-retry infinite
+nobind
 persist-key
 persist-tun
 verb 3
 mute 20
 
-# Script que se ejecuta al conectar
+# Script que configura el bridge automáticamente
 script-security 2
 up /etc/openvpn/up.sh
 EOF
 
-echo -e "${GREEN}- Archivo /etc/openvpn/client.ovpn creado${NC}"
-
-# Crear script que se ejecuta cuando OpenVPN se conecta
-echo "- Creando script de conexión..."
+# Crear script de conexión MEJORADO
+echo "- Creando script de configuración automática..."
 cat > /etc/openvpn/up.sh << 'EOF'
 #!/bin/sh
-# Script que se ejecuta cuando OpenVPN conecta
+echo "=== OpenVPN Conectado - Configurando Bridge ==="
 
-echo "=== OpenVPN Conectado ==="
-echo "Configurando bridge..."
+# Esperar a que la interfaz esté lista
+sleep 3
 
-# Esperar a que tap0 esté lista
-sleep 5
+# Crear bridge si no existe
+brctl show br-lan >/dev/null 2>&1 || {
+    echo "- Creando bridge br-lan..."
+    brctl addbr br-lan
+}
 
-# Agregar tap0 al bridge br-lan
+# Agregar interfaces al bridge
+echo "- Agregando interfaces al bridge..."
+brctl addif br-lan eth1 2>/dev/null
 brctl addif br-lan tap0 2>/dev/null
 
 # Configurar IP en la red del servidor
-ifconfig br-lan 192.168.1.200 netmask 255.255.255.0 2>/dev/null
+echo "- Configurando IP 192.168.1.200..."
+ifconfig br-lan 192.168.1.200 netmask 255.255.255.0 up
 
-# Agregar rutas
+# Configurar gateway
+echo "- Configurando gateway 192.168.1.1..."
 route add default gw 192.168.1.1 2>/dev/null
-route add -net 192.168.1.0 netmask 255.255.255.0 dev br-lan 2>/dev/null
 
-echo "Bridge configurado:"
-echo "- br-lan IP: 192.168.1.200"
-echo "- tap0 agregada al bridge"
-echo "- Rutas configuradas"
+# Desactivar DHCP local
+echo "- Desactivando servicios locales..."
+/etc/init.d/dnsmasq stop 2>/dev/null
+/etc/init.d/odhcpd stop 2>/dev/null
+
+echo "- Bridge configurado correctamente"
+echo "- IP: 192.168.1.200"
+echo "- Gateway: 192.168.1.1"
+echo "- Dispositivos recibirán IP del servidor"
 EOF
 
 chmod +x /etc/openvpn/up.sh
 
-# Configuración de red MUY SIMPLE
-echo "- Configurando red básica..."
+# Configurar OpenVPN sin reiniciar red
+echo "- Configurando servicio OpenVPN..."
+cat > /etc/config/openvpn << 'EOF'
+config openvpn 'client'
+    option enabled '1'
+    option config '/etc/openvpn/client.ovpn'
+EOF
 
-# Primero hacer backup
-cp /etc/config/network /etc/config/network.backup.vpn
-
-# Configuración mínima de red
+# Configuración de red MÍNIMA (solo para persistencia)
+echo "- Creando configuración de red persistente..."
 cat > /etc/config/network << 'EOF'
 config interface 'loopback'
     option ifname 'lo'
@@ -115,16 +118,13 @@ config interface 'loopback'
     option ipaddr '127.0.0.1'
     option netmask '255.0.0.0'
 
-config device 'br_lan_dev'
-    option type 'bridge'
-    option name 'br-lan'
-    list ports 'eth1'
-
 config interface 'lan'
-    option device 'br-lan'
+    option ifname 'br-lan'
     option proto 'static'
     option ipaddr '192.168.1.200'
     option netmask '255.255.255.0'
+    option gateway '192.168.1.1'
+    option dns '192.168.1.1'
     option ipv6 '0'
 
 config interface 'wan'
@@ -133,87 +133,94 @@ config interface 'wan'
     option ipv6 '0'
 EOF
 
-echo -e "${GREEN}- Configuración de red aplicada${NC}"
-
-# Desactivar DHCP local de forma segura
-echo "- Desactivando servicios locales..."
-/etc/init.d/dnsmasq stop 2>/dev/null
-/etc/init.d/dnsmasq disable 2>/dev/null
-
-# Solo UNA regla de firewall básica
-echo "- Configurando regla firewall básica..."
-uci delete firewall.Allow_OpenVPN 2>/dev/null
+# Solo UNA regla de firewall simple
+echo "- Configurando firewall básico..."
+uci delete firewall.allow_openvpn 2>/dev/null
 uci add firewall rule
-uci set firewall.@rule[-1].name='Allow-OpenVPN'
+uci set firewall.@rule[-1].name='allow_openvpn'
 uci set firewall.@rule[-1].src='wan'
 uci set firewall.@rule[-1].proto='udp'
 uci set firewall.@rule[-1].dest_port="$VPN_PORT"
 uci set firewall.@rule[-1].target='ACCEPT'
-uci commit firewall 2>/dev/null
+uci commit firewall
 
-echo -e "${GREEN}- Firewall configurado${NC}"
-
-# Iniciar OpenVPN
+# Iniciar OpenVPN SIN REINICIAR RED
 echo "- Iniciando OpenVPN..."
 /etc/init.d/openvpn enable
 /etc/init.d/openvpn start
 
-# Reiniciar red
-echo "- Reiniciando red..."
-/etc/init.d/network restart
+echo -e "${GREEN}- OpenVPN iniciado${NC}"
+echo -e "${YELLOW}- Esperando conexión...${NC}"
 
+# Esperar y verificar
 sleep 10
 
-echo -e "\n${GREEN}=== CONFIGURACIÓN COMPLETADA ===${NC}"
-echo -e "${GREEN}- OpenVPN cliente instalado${NC}"
-echo -e "${GREEN}- Servidor: $DDNS_SERVER:$VPN_PORT${NC}"
-
-echo -e "\n${YELLOW}=== VERIFICACIÓN ===${NC}"
+echo -e "\n${CYAN}=== VERIFICANDO CONEXIÓN ===${NC}"
 
 # Verificar OpenVPN
 if pgrep openvpn >/dev/null; then
     echo -e "${GREEN}- OpenVPN ejecutándose ✓${NC}"
 else
-    echo -e "${YELLOW}- OpenVPN no está ejecutándose${NC}"
+    echo -e "${RED}- OpenVPN no está ejecutándose${NC}"
 fi
 
-# Verificar interfaces
-echo "- Interfaces de red:"
-ifconfig | grep -E "(br-lan|tap0|eth1)" | while read line; do
-    echo "  $line"
-done
+# Verificar interfaces después de 20 segundos
+echo "- Esperando configuración automática (20 segundos)..."
+sleep 20
 
-# Verificar conexión después de 30 segundos
-echo -e "\n${YELLOW}- Esperando conexión VPN (30 segundos)...${NC}"
-sleep 30
+echo -e "\n${CYAN}=== ESTADO ACTUAL ===${NC}"
 
-echo -e "\n${CYAN}=== ESTADO FINAL ===${NC}"
-
-# Verificar si tap0 está en el bridge
-if brctl show br-lan 2>/dev/null | grep -q tap0; then
-    echo -e "${GREEN}- VPN integrada en bridge LAN ✓${NC}"
+# Verificar bridge
+if brctl show br-lan 2>/dev/null; then
+    echo -e "${GREEN}- Bridge br-lan existe ✓${NC}"
+    brctl show br-lan
 else
-    echo -e "${YELLOW}- VPN no integrada en bridge${NC}"
-    echo -e "${YELLOW}- Ejecuta manualmente: brctl addif br-lan tap0${NC}"
+    echo -e "${YELLOW}- Bridge br-lan no existe${NC}"
+fi
+
+# Verificar interfaces en el bridge
+if brctl show br-lan 2>/dev/null | grep -q tap0; then
+    echo -e "${GREEN}- tap0 en bridge ✓${NC}"
+else
+    echo -e "${YELLOW}- tap0 no está en el bridge${NC}"
 fi
 
 # Verificar IP
 CURRENT_IP=$(ifconfig br-lan 2>/dev/null | grep 'inet addr' | cut -d: -f2 | awk '{print $1}')
 if [ -n "$CURRENT_IP" ]; then
-    echo -e "${GREEN}- IP actual: $CURRENT_IP${NC}"
+    echo -e "${GREEN}- IP br-lan: $CURRENT_IP ✓${NC}"
 else
-    echo -e "${YELLOW}- No se detectó IP en br-lan${NC}"
+    echo -e "${YELLOW}- No hay IP en br-lan${NC}"
 fi
 
-echo -e "\n${GREEN}=== INSTRUCCIONES ===${NC}"
-echo -e "${GREEN}1. Conecta el decodificador al router cliente${NC}"
-echo -e "${GREEN}2. El decodificador debería recibir IP 192.168.1.x${NC}"
-echo -e "${GREEN}3. Estará en la misma red que el servidor${NC}"
+# Probar conectividad
+echo -e "\n${CYAN}=== PRUEBA DE CONECTIVIDAD ===${NC}"
+if ping -c 2 -W 1 192.168.1.1 >/dev/null 2>&1; then
+    echo -e "${GREEN}- Puede alcanzar 192.168.1.1 ✓${NC}"
+else
+    echo -e "${YELLOW}- No puede alcanzar 192.168.1.1${NC}"
+fi
 
-echo -e "\n${YELLOW}=== COMANDOS ÚTILES ===${NC}"
+if ping -c 2 -W 1 192.168.1.200 >/dev/null 2>&1; then
+    echo -e "${GREEN}- IP local responde ✓${NC}"
+else
+    echo -e "${YELLOW}- IP local no responde${NC}"
+fi
+
+echo -e "\n${GREEN}=== CONFIGURACIÓN COMPLETADA ===${NC}"
+echo -e "${GREEN}- El script ha terminado${NC}"
+echo -e "${GREEN}- OpenVPN se conectará automáticamente${NC}"
+echo -e "${GREEN}- El bridge se configurará cuando se establezca la VPN${NC}"
+
+echo -e "\n${YELLOW}=== INSTRUCCIONES ===${NC}"
+echo -e "${YELLOW}1. Conecta dispositivos al router cliente${NC}"
+echo -e "${YELLOW}2. Deberían recibir IP 192.168.1.x del servidor${NC}"
+echo -e "${YELLOW}3. Estarán en la misma red que el servidor${NC}"
+
+echo -e "\n${YELLOW}=== SI HAY PROBLEMAS ===${NC}"
 echo -e "${YELLOW}- Ver logs: logread | grep openvpn${NC}"
-echo -e "${YELLOW}- Ver bridge: brctl show br-lan${NC}"
-echo -e "${YELLOW}- Ver rutas: route -n${NC}"
 echo -e "${YELLOW}- Reiniciar VPN: /etc/init.d/openvpn restart${NC}"
+echo -e "${YELLOW}- Ver bridge: brctl show br-lan${NC}"
+echo -e "${YELLOW}- Agregar tap0 manual: brctl addif br-lan tap0${NC}"
 
-echo -e "\n${GREEN}¡Listo! El router cliente está configurado.${NC}"
+echo -e "\n${GREEN}¡Listo! No se requiere reinicio.${NC}"
