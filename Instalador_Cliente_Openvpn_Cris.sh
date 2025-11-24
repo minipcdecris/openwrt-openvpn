@@ -14,43 +14,6 @@ check_status() {
     fi
 }
 
-# Función alternativa más simple para reiniciar red
-restart_network_simple() {
-    echo -e "${YELLOW}- Aplicando cambios de configuración de red...${NC}"
-    echo -e "${YELLOW}- Esto puede tomar unos segundos...${NC}"
-    
-    # Verificar si timeout está disponible
-    if command -v timeout >/dev/null 2>&1; then
-        # Ejecutar y esperar con timeout
-        timeout 30 /etc/init.d/network restart
-        local result=$?
-        
-        if [ $result -eq 0 ]; then
-            echo -e "${GREEN}- Cambios de red aplicados correctamente${NC}"
-            return 0
-        elif [ $result -eq 124 ]; then
-            echo -e "${YELLOW}- Timeout en reinicio de red, continuando...${NC}"
-            return 1
-        else
-            echo -e "${RED}- Error en el reinicio de red (código: $result)${NC}"
-            return 1
-        fi
-    else
-        # Si timeout no está disponible, ejecutar normalmente
-        echo -e "${YELLOW}- 'timeout' no disponible, ejecutando sin timeout...${NC}"
-        /etc/init.d/network restart
-        local result=$?
-        
-        if [ $result -eq 0 ]; then
-            echo -e "${GREEN}- Cambios de red aplicados correctamente${NC}"
-            return 0
-        else
-            echo -e "${RED}- Error en el reinicio de red (código: $result)${NC}"
-            return 1
-        fi
-    fi
-}
-
 # Verificar que estamos en OpenWrt
 if [ ! -f /etc/openwrt_release ]; then
     echo -e "${RED}- Error: Este script solo funciona en OpenWrt${NC}"
@@ -155,7 +118,7 @@ echo -e "${YELLOW}- Configurando bridge para VPN...${NC}"
 if ! grep -q "br-vpn" /etc/config/network; then
     # Crear backup de la configuración de red
     cp /etc/config/network /etc/config/network.backup.$(date +%Y%m%d_%H%M%S)
-    echo -e "${GREEN}- Backup de configuración de red creado${NC}"
+    echo -e "${GREEN}- Backup de configuración de red creado: /etc/config/network.backup.$(date +%Y%m%d_%H%M%S)${NC}"
     
     # Añadir configuración del bridge
     echo "" >> /etc/config/network
@@ -172,7 +135,7 @@ if ! grep -q "br-vpn" /etc/config/network; then
     echo "    option device 'br-vpn'" >> /etc/config/network
     echo "" >> /etc/config/network
     
-    echo -e "${GREEN}- Bridge br-vpn configurado${NC}"
+    echo -e "${GREEN}- Bridge br-vpn configurado en /etc/config/network${NC}"
 else
     echo -e "${YELLOW}- El bridge br-vpn ya existe en la configuración${NC}"
 fi
@@ -184,9 +147,6 @@ if grep -q "option name 'br-lan'" /etc/config/network && ! grep -q "igmp_snoopin
     echo -e "${GREEN}- IGMP snooping configurado para br-lan${NC}"
 fi
 
-# Aplicar cambios de red con la función mejorada
-restart_network_simple
-
 # Mostrar resumen de la configuración
 echo -e "\n${GREEN}=== RESUMEN DE CONFIGURACIÓN ==="
 echo -e "✓ Paquetes instalados"
@@ -194,7 +154,7 @@ echo -e "✓ Archivo client.ovpn configurado en /etc/openvpn/"
 echo -e "✓ Configuración de OpenVPN creada"
 echo -e "✓ Bridge br-vpn configurado"
 echo -e "✓ Interfaz VPN creada"
-echo -e "✓ Cambios de red aplicados"
+echo -e "✓ Backup de configuración de red creado"
 echo -e "==============================${NC}\n"
 
 # Verificar el archivo client.ovpn
@@ -212,34 +172,56 @@ else
     echo -e "${YELLOW}- Debe editarlo manualmente: nano /etc/openvpn/client.ovpn${NC}"
 fi
 
-# Mostrar estado de los servicios
-echo -e "${YELLOW}- Estado de los servicios:${NC}"
-/etc/init.d/openvpn status 2>/dev/null || echo "- Servicio OpenVPN no está corriendo (normal por ahora)"
+# Mostrar los cambios pendientes en la configuración de red
+echo -e "\n${YELLOW}=== CAMBIOS PENDIENTES EN CONFIGURACIÓN DE RED ==="
+echo -e "Se han modificado los siguientes archivos:"
+echo -e "  /etc/config/network (con bridge br-vpn)"
+echo -e "  /etc/config/openvpn (con cliente VPN)"
+echo -e "  /etc/openvpn/client.ovpn (configuración del cliente)"
+echo -e ""
+echo -e "Para aplicar estos cambios, necesita reiniciar el servicio de red o el dispositivo."
+echo -e "===============================================${NC}\n"
 
-echo -e "\n${YELLOW}PRÓXIMOS PASOS:${NC}"
-echo -e "1. Verifique la configuración: cat /etc/openvpn/client.ovpn"
-echo -e "2. Si necesita editar: nano /etc/openvpn/client.ovpn"
-echo -e "3. Inicie OpenVPN: /etc/init.d/openvpn start"
-echo -e "4. Habilite OpenVPN para que inicie automáticamente:"
-echo -e "   /etc/init.d/openvpn enable"
-echo -e "5. Verifique el estado: /etc/init.d/openvpn status"
-echo -e "6. Verifique la conexión de red después del reinicio"
+echo -e "\n${YELLOW}PRÓXIMOS PASOS RECOMENDADOS:${NC}"
+echo -e "1. Verifique la configuración de red: cat /etc/config/network"
+echo -e "2. Verifique la configuración OpenVPN: cat /etc/openvpn/client.ovpn"
+echo -e "3. Si necesita editar: nano /etc/openvpn/client.ovpn"
+echo -e "4. REINICIE EL DISPOSITIVO para aplicar todos los cambios"
 
-# Preguntar si desea reiniciar
-echo -e "\n${YELLOW}¿Desea reiniciar el dispositivo para asegurar que todos los cambios se apliquen? (s/n)${NC}"
-echo -e "${YELLOW}(Recomendado para aplicar completamente los cambios de red)${NC}"
-read -r response
-case "$response" in
-    [sS]|[sS][iI]|[yY]|[yY][eE][sS])
-        echo -e "${YELLOW}- Reiniciando en 5 segundos...${NC}"
+# Ofrecer opciones al usuario
+echo -e "\n${YELLOW}¿Qué desea hacer ahora?${NC}"
+echo -e "1) Reiniciar el dispositivo (RECOMENDADO)"
+echo -e "2) Solo reiniciar el servicio de red (puede fallar)"
+echo -e "3) No hacer nada, salir del script"
+echo -e "${YELLOW}Seleccione una opción (1/2/3):${NC}"
+
+read -r option
+case "$option" in
+    1)
+        echo -e "${YELLOW}- Reiniciando dispositivo en 5 segundos...${NC}"
         echo -e "${YELLOW}- Presione Ctrl+C para cancelar${NC}"
         sleep 5
         reboot
         ;;
+    2)
+        echo -e "${YELLOW}- Intentando reiniciar servicio de red...${NC}"
+        echo -e "${YELLOW}- ADVERTENCIA: Esto puede fallar o bloquearse${NC}"
+        echo -e "${YELLOW}- Si se bloquea, puede reiniciar manualmente más tarde${NC}"
+        /etc/init.d/network restart &
+        echo -e "${GREEN}- Comando de reinicio de red ejecutado en segundo plano${NC}"
+        echo -e "${YELLOW}- El script continúa...${NC}"
+        ;;
+    3)
+        echo -e "${YELLOW}- Saliendo sin aplicar cambios de red${NC}"
+        ;;
     *)
-        echo -e "${YELLOW}- Reinicio cancelado. Puede reiniciar manualmente más tarde con: reboot${NC}"
-        echo -e "${YELLOW}- Recuerde iniciar OpenVPN manualmente: /etc/init.d/openvpn start${NC}"
+        echo -e "${RED}- Opción no válida. Saliendo.${NC}"
         ;;
 esac
 
-echo -e "\n${GREEN}¡Configuración completada!${NC}"
+echo -e "\n${GREEN}¡Configuración de archivos completada!${NC}"
+echo -e "${YELLOW}Recuerde:${NC}"
+echo -e "- Los cambios de red requieren reinicio para aplicarse completamente"
+echo -e "- Después del reinicio, inicie OpenVPN: /etc/init.d/openvpn start"
+echo -e "- Habilite OpenVPN: /etc/init.d/openvpn enable"
+echo -e "- Verifique el estado: /etc/init.d/openvpn status"
