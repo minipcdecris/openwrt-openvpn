@@ -111,50 +111,73 @@ else
     fi
 fi
 
-# Configurar bridge solo si no existe
-echo -e "${YELLOW}- Configurando bridge para VPN...${NC}"
+# Configurar bridge e interfaz VPN
+echo -e "${YELLOW}- Configurando bridge e interfaz VPN...${NC}"
 
-# Verificar si br-vpn ya existe en la configuración de red
-if ! grep -q "br-vpn" /etc/config/network; then
-    # Crear backup de la configuración de red
-    cp /etc/config/network /etc/config/network.backup.$(date +%Y%m%d_%H%M%S)
-    echo -e "${GREEN}- Backup de configuración de red creado: /etc/config/network.backup.$(date +%Y%m%d_%H%M%S)${NC}"
-    
-    # Añadir configuración del bridge
-    echo "" >> /etc/config/network
-    echo "config device" >> /etc/config/network
-    echo "    option type 'bridge'" >> /etc/config/network
-    echo "    option name 'br-vpn'" >> /etc/config/network
-    echo "    list ports 'tap0'" >> /etc/config/network
-    echo "    option ipv6 '0'" >> /etc/config/network
-    echo "    option igmp_snooping '1'" >> /etc/config/network
-    echo "" >> /etc/config/network
-    
-    echo "config interface 'vpn'" >> /etc/config/network
-    echo "    option proto 'none'" >> /etc/config/network
-    echo "    option device 'br-vpn'" >> /etc/config/network
-    echo "" >> /etc/config/network
-    
-    echo -e "${GREEN}- Bridge br-vpn configurado en /etc/config/network${NC}"
+# Crear backup de la configuración de red
+cp /etc/config/network /etc/config/network.backup.$(date +%Y%m%d_%H%M%S)
+echo -e "${GREEN}- Backup de configuración de red creado${NC}"
+
+# Verificar y configurar el bridge br-vpn
+if ! uci show network.br-vpn > /dev/null 2>&1; then
+    echo -e "${YELLOW}- Configurando bridge br-vpn...${NC}"
+    uci set network.br-vpn=device
+    uci set network.br-vpn.type='bridge'
+    uci set network.br-vpn.name='br-vpn'
+    uci add_list network.br-vpn.ports='tap0'
+    uci set network.br-vpn.ipv6='0'
+    uci set network.br-vpn.igmp_snooping='1'
+    echo -e "${GREEN}- Bridge br-vpn configurado${NC}"
 else
-    echo -e "${YELLOW}- El bridge br-vpn ya existe en la configuración${NC}"
+    echo -e "${YELLOW}- El bridge br-vpn ya existe${NC}"
+fi
+
+# Verificar y configurar la interfaz VPN
+if ! uci show network.vpn > /dev/null 2>&1; then
+    echo -e "${YELLOW}- Configurando interfaz VPN...${NC}"
+    uci set network.vpn=interface
+    uci set network.vpn.proto='none'
+    uci set network.vpn.device='br-vpn'
+    echo -e "${GREEN}- Interfaz VPN configurada${NC}"
+else
+    echo -e "${YELLOW}- La interfaz VPN ya existe${NC}"
 fi
 
 # Configurar IGMP snooping para br-lan si no existe
-if grep -q "option name 'br-lan'" /etc/config/network && ! grep -q "igmp_snooping" /etc/config/network; then
+if uci show network.@device[0] 2>/dev/null | grep -q "br-lan" && ! uci show network.@device[0] 2>/dev/null | grep -q "igmp_snooping"; then
     echo -e "${YELLOW}- Configurando IGMP snooping para br-lan...${NC}"
-    sed -i "/option name 'br-lan'/a \    option igmp_snooping '1'" /etc/config/network
+    uci set network.@device[0].igmp_snooping='1'
     echo -e "${GREEN}- IGMP snooping configurado para br-lan${NC}"
 fi
+
+# Aplicar cambios de configuración UCI
+echo -e "${YELLOW}- Aplicando cambios de configuración...${NC}"
+uci commit network
+uci commit openvpn
+echo -e "${GREEN}- Cambios de configuración aplicados${NC}"
+
+# Mostrar la configuración aplicada
+echo -e "${YELLOW}- Configuración de red aplicada:${NC}"
+echo -e "Bridge VPN:"
+uci show network.br-vpn
+echo -e "Interfaz VPN:"
+uci show network.vpn
+
+# Iniciar y habilitar OpenVPN
+echo -e "${YELLOW}- Iniciando servicio OpenVPN...${NC}"
+/etc/init.d/openvpn enable
+/etc/init.d/openvpn start
+check_status
+echo -e "${GREEN}- Servicio OpenVPN iniciado y habilitado${NC}"
 
 # Mostrar resumen de la configuración
 echo -e "\n${GREEN}=== RESUMEN DE CONFIGURACIÓN ==="
 echo -e "✓ Paquetes instalados"
-echo -e "✓ Archivo client.ovpn configurado en /etc/openvpn/"
+echo -e "✓ Archivo client.ovpn configurado"
 echo -e "✓ Configuración de OpenVPN creada"
 echo -e "✓ Bridge br-vpn configurado"
 echo -e "✓ Interfaz VPN creada"
-echo -e "✓ Backup de configuración de red creado"
+echo -e "✓ Servicio OpenVPN iniciado"
 echo -e "==============================${NC}\n"
 
 # Verificar el archivo client.ovpn
@@ -162,66 +185,43 @@ echo -e "${YELLOW}- Verificando archivo client.ovpn...${NC}"
 if [ -s /etc/openvpn/client.ovpn ]; then
     file_size=$(wc -l < /etc/openvpn/client.ovpn)
     if [ "$file_size" -gt 5 ]; then
-        echo -e "${GREEN}- El archivo client.ovpn tiene $file_size líneas (parece configurado)${NC}"
+        echo -e "${GREEN}- El archivo client.ovpn tiene $file_size líneas${NC}"
     else
-        echo -e "${RED}- ADVERTENCIA: El archivo client.ovpn parece muy pequeño ($file_size líneas)${NC}"
-        echo -e "${YELLOW}- Es posible que necesite editarlo manualmente: nano /etc/openvpn/client.ovpn${NC}"
+        echo -e "${RED}- ADVERTENCIA: El archivo client.ovpn parece muy pequeño${NC}"
     fi
 else
     echo -e "${RED}- ERROR: El archivo client.ovpn está vacío${NC}"
-    echo -e "${YELLOW}- Debe editarlo manualmente: nano /etc/openvpn/client.ovpn${NC}"
 fi
 
-# Mostrar los cambios pendientes en la configuración de red
-echo -e "\n${YELLOW}=== CAMBIOS PENDIENTES EN CONFIGURACIÓN DE RED ==="
-echo -e "Se han modificado los siguientes archivos:"
-echo -e "  /etc/config/network (con bridge br-vpn)"
-echo -e "  /etc/config/openvpn (con cliente VPN)"
-echo -e "  /etc/openvpn/client.ovpn (configuración del cliente)"
-echo -e ""
-echo -e "Para aplicar estos cambios, necesita reiniciar el servicio de red o el dispositivo."
-echo -e "===============================================${NC}\n"
+# Verificar servicios
+echo -e "${YELLOW}- Verificando servicios...${NC}"
+echo -e "OpenVPN status:"
+/etc/init.d/openvpn status
 
-echo -e "\n${YELLOW}PRÓXIMOS PASOS RECOMENDADOS:${NC}"
-echo -e "1. Verifique la configuración de red: cat /etc/config/network"
-echo -e "2. Verifique la configuración OpenVPN: cat /etc/openvpn/client.ovpn"
-echo -e "3. Si necesita editar: nano /etc/openvpn/client.ovpn"
-echo -e "4. REINICIE EL DISPOSITIVO para aplicar todos los cambios"
+# Verificar interfaces de red
+echo -e "${YELLOW}- Verificando interfaces de red...${NC}"
+ifconfig | grep -E "(br-vpn|tap0|vpn)" || echo -e "${YELLOW}- Interfaces VPN aún no visibles (pueden necesitar reinicio)${NC}"
 
-# Ofrecer opciones al usuario
-echo -e "\n${YELLOW}¿Qué desea hacer ahora?${NC}"
-echo -e "1) Reiniciar el dispositivo (RECOMENDADO)"
-echo -e "2) Solo reiniciar el servicio de red (puede fallar)"
-echo -e "3) No hacer nada, salir del script"
-echo -e "${YELLOW}Seleccione una opción (1/2/3):${NC}"
+echo -e "\n${YELLOW}PRÓXIMOS PASOS:${NC}"
+echo -e "1. Verificar conexión VPN"
+echo -e "2. Si la interfaz VPN no aparece, reiniciar el dispositivo"
+echo -e "3. Verificar configuración: uci show network.vpn"
+echo -e "4. Verificar estado OpenVPN: /etc/init.d/openvpn status"
 
-read -r option
-case "$option" in
-    1)
-        echo -e "${YELLOW}- Reiniciando dispositivo en 5 segundos...${NC}"
-        echo -e "${YELLOW}- Presione Ctrl+C para cancelar${NC}"
+# Preguntar si desea reiniciar para asegurar que la interfaz se cree
+echo -e "\n${YELLOW}¿Desea reiniciar el dispositivo para crear la interfaz VPN? (s/n)${NC}"
+echo -e "${YELLOW}(Recomendado si la interfaz VPN no se crea automáticamente)${NC}"
+read -r response
+case "$response" in
+    [sS]|[sS][iI]|[yY]|[yY][eE][sS])
+        echo -e "${YELLOW}- Reiniciando en 5 segundos...${NC}"
         sleep 5
         reboot
         ;;
-    2)
-        echo -e "${YELLOW}- Intentando reiniciar servicio de red...${NC}"
-        echo -e "${YELLOW}- ADVERTENCIA: Esto puede fallar o bloquearse${NC}"
-        echo -e "${YELLOW}- Si se bloquea, puede reiniciar manualmente más tarde${NC}"
-        /etc/init.d/network restart &
-        echo -e "${GREEN}- Comando de reinicio de red ejecutado en segundo plano${NC}"
-        echo -e "${YELLOW}- El script continúa...${NC}"
-        ;;
-    3)
-        echo -e "${YELLOW}- Saliendo sin aplicar cambios de red${NC}"
-        ;;
     *)
-        echo -e "${RED}- Opción no válida. Saliendo.${NC}"
+        echo -e "${YELLOW}- Reinicio cancelado${NC}"
+        echo -e "${YELLOW}- Si la interfaz VPN no aparece, ejecute 'reboot' manualmente${NC}"
         ;;
 esac
 
-echo -e "\n${GREEN}¡Configuración de archivos completada!${NC}"
-echo -e "${YELLOW}Recuerde:${NC}"
-echo -e "- Los cambios de red requieren reinicio para aplicarse completamente"
-echo -e "- Después del reinicio, inicie OpenVPN: /etc/init.d/openvpn start"
-echo -e "- Habilite OpenVPN: /etc/init.d/openvpn enable"
-echo -e "- Verifique el estado: /etc/init.d/openvpn status"
+echo -e "\n${GREEN}¡Configuración completada!${NC}"
