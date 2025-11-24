@@ -111,36 +111,47 @@ else
     fi
 fi
 
-# Configurar bridge e interfaz VPN
-echo -e "${YELLOW}- Configurando bridge e interfaz VPN...${NC}"
+# Configurar bridge e interfaz VPN con eth0 y tap0
+echo -e "${YELLOW}- Configurando bridge br-vpn con eth0 y tap0...${NC}"
 
 # Crear backup de la configuración de red
 cp /etc/config/network /etc/config/network.backup.$(date +%Y%m%d_%H%M%S)
 echo -e "${GREEN}- Backup de configuración de red creado${NC}"
 
-# Verificar y configurar el bridge br-vpn
+# Verificar y configurar el bridge br-vpn con eth0 y tap0
 if ! uci show network.br-vpn > /dev/null 2>&1; then
-    echo -e "${YELLOW}- Configurando bridge br-vpn...${NC}"
+    echo -e "${YELLOW}- Configurando bridge br-vpn con eth0 y tap0...${NC}"
     uci set network.br-vpn=device
     uci set network.br-vpn.type='bridge'
     uci set network.br-vpn.name='br-vpn'
+    uci add_list network.br-vpn.ports='eth0'
     uci add_list network.br-vpn.ports='tap0'
     uci set network.br-vpn.ipv6='0'
     uci set network.br-vpn.igmp_snooping='1'
-    echo -e "${GREEN}- Bridge br-vpn configurado${NC}"
+    echo -e "${GREEN}- Bridge br-vpn configurado con eth0 y tap0${NC}"
 else
-    echo -e "${YELLOW}- El bridge br-vpn ya existe${NC}"
+    echo -e "${YELLOW}- El bridge br-vpn ya existe, actualizando puertos...${NC}"
+    # Limpiar puertos existentes y añadir eth0 y tap0
+    uci delete network.br-vpn.ports
+    uci add_list network.br-vpn.ports='eth0'
+    uci add_list network.br-vpn.ports='tap0'
+    uci set network.br-vpn.ipv6='0'
+    uci set network.br-vpn.igmp_snooping='1'
+    echo -e "${GREEN}- Puertos del bridge br-vpn actualizados a eth0 y tap0${NC}"
 fi
 
 # Verificar y configurar la interfaz VPN
 if ! uci show network.vpn > /dev/null 2>&1; then
     echo -e "${YELLOW}- Configurando interfaz VPN...${NC}"
     uci set network.vpn=interface
-    uci set network.vpn.proto='none'
+    uci set network.vpn.proto='dhcp'
     uci set network.vpn.device='br-vpn'
-    echo -e "${GREEN}- Interfaz VPN configurada${NC}"
+    echo -e "${GREEN}- Interfaz VPN configurada con DHCP${NC}"
 else
-    echo -e "${YELLOW}- La interfaz VPN ya existe${NC}"
+    echo -e "${YELLOW}- La interfaz VPN ya existe, actualizando...${NC}"
+    uci set network.vpn.proto='dhcp'
+    uci set network.vpn.device='br-vpn'
+    echo -e "${GREEN}- Interfaz VPN actualizada${NC}"
 fi
 
 # Configurar IGMP snooping para br-lan si no existe
@@ -158,7 +169,7 @@ echo -e "${GREEN}- Cambios de configuración aplicados${NC}"
 
 # Mostrar la configuración aplicada
 echo -e "${YELLOW}- Configuración de red aplicada:${NC}"
-echo -e "Bridge VPN:"
+echo -e "Bridge br-vpn:"
 uci show network.br-vpn
 echo -e "Interfaz VPN:"
 uci show network.vpn
@@ -175,8 +186,8 @@ echo -e "\n${GREEN}=== RESUMEN DE CONFIGURACIÓN ==="
 echo -e "✓ Paquetes instalados"
 echo -e "✓ Archivo client.ovpn configurado"
 echo -e "✓ Configuración de OpenVPN creada"
-echo -e "✓ Bridge br-vpn configurado"
-echo -e "✓ Interfaz VPN creada"
+echo -e "✓ Bridge br-vpn configurado con eth0 y tap0"
+echo -e "✓ Interfaz VPN creada con DHCP"
 echo -e "✓ Servicio OpenVPN iniciado"
 echo -e "==============================${NC}\n"
 
@@ -200,17 +211,23 @@ echo -e "OpenVPN status:"
 
 # Verificar interfaces de red
 echo -e "${YELLOW}- Verificando interfaces de red...${NC}"
-ifconfig | grep -E "(br-vpn|tap0|vpn)" || echo -e "${YELLOW}- Interfaces VPN aún no visibles (pueden necesitar reinicio)${NC}"
+ifconfig | grep -E "(br-vpn|eth0|tap0|vpn)" || echo -e "${YELLOW}- Interfaces VPN aún no visibles (pueden necesitar reinicio)${NC}"
+
+# Mostrar configuración de bridges
+echo -e "${YELLOW}- Bridges configurados:${NC}"
+brctl show 2>/dev/null || echo -e "${YELLOW}- brctl no disponible, usando alternativa...${NC}"
+ifconfig | grep "br-"
 
 echo -e "\n${YELLOW}PRÓXIMOS PASOS:${NC}"
-echo -e "1. Verificar conexión VPN"
-echo -e "2. Si la interfaz VPN no aparece, reiniciar el dispositivo"
-echo -e "3. Verificar configuración: uci show network.vpn"
+echo -e "1. El bridge br-vpn combina eth0 (física) + tap0 (VPN)"
+echo -e "2. La interfaz VPN usará br-vpn como dispositivo"
+echo -e "3. Verificar configuración: uci show network.br-vpn"
 echo -e "4. Verificar estado OpenVPN: /etc/init.d/openvpn status"
+echo -e "5. Verificar bridge: brctl show (si está disponible)"
 
 # Preguntar si desea reiniciar para asegurar que la interfaz se cree
-echo -e "\n${YELLOW}¿Desea reiniciar el dispositivo para crear la interfaz VPN? (s/n)${NC}"
-echo -e "${YELLOW}(Recomendado si la interfaz VPN no se crea automáticamente)${NC}"
+echo -e "\n${YELLOW}¿Desea reiniciar el dispositivo para aplicar todos los cambios? (s/n)${NC}"
+echo -e "${YELLOW}(Recomendado para crear el bridge br-vpn correctamente)${NC}"
 read -r response
 case "$response" in
     [sS]|[sS][iI]|[yY]|[yY][eE][sS])
@@ -220,8 +237,12 @@ case "$response" in
         ;;
     *)
         echo -e "${YELLOW}- Reinicio cancelado${NC}"
-        echo -e "${YELLOW}- Si la interfaz VPN no aparece, ejecute 'reboot' manualmente${NC}"
+        echo -e "${YELLOW}- Si el bridge no funciona, ejecute 'reboot' manualmente${NC}"
         ;;
 esac
 
 echo -e "\n${GREEN}¡Configuración completada!${NC}"
+echo -e "${YELLOW}Recordatorio: El bridge br-vpn ahora combina:${NC}"
+echo -e "  - eth0 (interfaz física)"
+echo -e "  - tap0 (interfaz VPN)"
+echo -e "  - Ambos estarán en la misma interfaz bridge br-vpn"
