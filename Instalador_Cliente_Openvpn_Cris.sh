@@ -112,23 +112,34 @@ else
     fi
 fi
 
-# Desactivar WiFi
-echo -e "${YELLOW}- Desactivando conexiones WiFi...${NC}"
+# Desactivar WiFi de forma segura
+echo -e "${YELLOW}- Verificando configuración WiFi...${NC}"
 if [ -f /etc/config/wireless ]; then
-    # Deshabilitar todas las interfaces WiFi
-    wifi config | while read line; do
-        if echo "$line" | grep -q "disabled"; then
-            echo -e "${YELLOW}- WiFi ya está desactivado${NC}"
-        else
-            uci set wireless.@wifi-iface[0].disabled='1'
-            uci set wireless.@wifi-device[0].disabled='1'
-            uci commit wireless
-            echo -e "${GREEN}- WiFi desactivado${NC}"
-            break
-        fi
-    done
+    # Verificar si hay interfaces WiFi configuradas
+    if uci show wireless > /dev/null 2>&1; then
+        echo -e "${YELLOW}- Desactivando WiFi...${NC}"
+        
+        # Desactivar dispositivos WiFi
+        wifi_devices=$(uci show wireless | grep "=wifi-device" | cut -d'.' -f2 | cut -d'=' -f1 | uniq)
+        for device in $wifi_devices; do
+            uci set wireless.$device.disabled='1'
+            echo -e "${GREEN}- Dispositivo WiFi $device desactivado${NC}"
+        done
+        
+        # Desactivar interfaces WiFi
+        wifi_interfaces=$(uci show wireless | grep "=wifi-iface" | cut -d'.' -f2 | cut -d'=' -f1 | uniq)
+        for interface in $wifi_interfaces; do
+            uci set wireless.$interface.disabled='1'
+            echo -e "${GREEN}- Interfaz WiFi $interface desactivada${NC}"
+        done
+        
+        uci commit wireless
+        echo -e "${GREEN}- WiFi desactivado correctamente${NC}"
+    else
+        echo -e "${YELLOW}- No hay configuración WiFi activa encontrada${NC}"
+    fi
 else
-    echo -e "${YELLOW}- No se encontró configuración WiFi${NC}"
+    echo -e "${YELLOW}- No existe archivo de configuración WiFi${NC}"
 fi
 
 # Configurar bridge e interfaz VPN con eth0 y tap0 (sin DHCP)
@@ -185,7 +196,9 @@ fi
 echo -e "${YELLOW}- Aplicando cambios de configuración...${NC}"
 uci commit network
 uci commit openvpn
-uci commit wireless
+if [ -f /etc/config/wireless ]; then
+    uci commit wireless
+fi
 echo -e "${GREEN}- Cambios de configuración aplicados${NC}"
 
 # Mostrar la configuración aplicada
@@ -194,8 +207,11 @@ echo -e "Bridge br-vpn:"
 uci show network.br-vpn
 echo -e "Interfaz VPN:"
 uci show network.vpn
-echo -e "WiFi:"
-uci show wireless | grep disabled
+
+if [ -f /etc/config/wireless ]; then
+    echo -e "WiFi:"
+    uci show wireless | grep disabled || echo -e "${YELLOW}- No hay configuración WiFi para mostrar${NC}"
+fi
 
 # Iniciar y habilitar OpenVPN
 echo -e "${YELLOW}- Iniciando servicio OpenVPN...${NC}"
@@ -209,7 +225,7 @@ echo -e "\n${GREEN}=== RESUMEN DE CONFIGURACIÓN ==="
 echo -e "✓ Paquetes instalados"
 echo -e "✓ Archivo client.ovpn configurado"
 echo -e "✓ Configuración de OpenVPN creada"
-echo -e "✓ WiFi desactivado"
+echo -e "✓ WiFi desactivado (si existía)"
 echo -e "✓ Bridge br-vpn configurado con eth0 y tap0"
 echo -e "✓ Interfaz VPN creada sin DHCP"
 echo -e "✓ Servicio OpenVPN iniciado"
@@ -239,13 +255,12 @@ ifconfig | grep -E "(br-vpn|eth0|tap0|vpn)" || echo -e "${YELLOW}- Interfaces VP
 
 # Mostrar configuración de bridges
 echo -e "${YELLOW}- Bridges configurados:${NC}"
-brctl show 2>/dev/null || echo -e "${YELLOW}- brctl no disponible, usando alternativa...${NC}"
-ifconfig | grep "br-"
+brctl show 2>/dev/null || echo -e "${YELLOW}- brctl no disponible${NC}"
 
 echo -e "\n${YELLOW}PRÓXIMOS PASOS:${NC}"
 echo -e "1. El bridge br-vpn combina eth0 (física) + tap0 (VPN)"
 echo -e "2. La interfaz VPN está configurada sin DHCP"
-echo -e "3. WiFi desactivado"
+echo -e "3. WiFi desactivado (si existía)"
 echo -e "4. Verificar configuración: uci show network.br-vpn"
 echo -e "5. Verificar estado OpenVPN: /etc/init.d/openvpn status"
 
@@ -270,5 +285,5 @@ echo -e "\n${GREEN}¡Configuración completada!${NC}"
 echo -e "${YELLOW}Resumen final:${NC}"
 echo -e "  - Bridge br-vpn: eth0 + tap0"
 echo -e "  - Interfaz VPN: sin DHCP"
-echo -e "  - WiFi: desactivado"
+echo -e "  - WiFi: desactivado (si existía)"
 echo -e "  - OpenVPN: iniciado y habilitado"
