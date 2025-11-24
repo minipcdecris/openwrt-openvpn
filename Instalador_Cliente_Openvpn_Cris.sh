@@ -34,28 +34,28 @@ opkg install openvpn-easy-rsa openvpn-openssl luci-app-openvpn nano
 check_status
 echo -e "${GREEN}- Paquetes instalados correctamente${NC}"
 
-# Función para crear el archivo client.ovpn
+# Función para crear el archivo client.ovpn sin esperar Enter después de Ctrl+D
 create_client_ovpn() {
     echo -e "${YELLOW}- Creando archivo client.ovpn...${NC}"
     
     echo -e "${GREEN}=== INSTRUCCIONES ==="
     echo -e "Por favor, pegue el contenido completo de su archivo client.ovpn"
-    echo -e "Cuando termine, presione Ctrl+D para guardar"
+    echo -e "Cuando termine, presione Ctrl+D para guardar y continuar"
     echo -e "========================${NC}"
     echo ""
     
-    # Crear el archivo y permitir al usuario pegar el contenido
+    # Crear el archivo base
     cat > /etc/openvpn/client.ovpn << 'EOF'
 # === CONFIGURACIÓN CLIENTE OPENVPN ===
 # Pegue debajo de esta línea el contenido de su client.ovpn
 
 EOF
     
-    # Permitir al usuario pegar el contenido
+    # Permitir al usuario pegar el contenido sin esperar Enter
     echo -e "${YELLOW}Pegue ahora el contenido de client.ovpn (Ctrl+D cuando termine):${NC}"
+    # Usar cat para leer la entrada y añadir al archivo
     cat >> /etc/openvpn/client.ovpn
     
-    check_status
     echo -e "${GREEN}- Archivo /etc/openvpn/client.ovpn creado correctamente${NC}"
     
     # Mostrar preview del archivo creado
@@ -72,6 +72,7 @@ if [ -f /etc/openvpn/client.ovpn ]; then
     echo ""
     
     echo -e "${YELLOW}¿Desea sobrescribirlo? (s/n)${NC}"
+    # Leer sin esperar Enter
     read -r response
     case "$response" in
         [sS]|[sS][iI]|[yY]|[yY][eE][sS])
@@ -111,7 +112,26 @@ else
     fi
 fi
 
-# Configurar bridge e interfaz VPN con eth0 y tap0
+# Desactivar WiFi
+echo -e "${YELLOW}- Desactivando conexiones WiFi...${NC}"
+if [ -f /etc/config/wireless ]; then
+    # Deshabilitar todas las interfaces WiFi
+    wifi config | while read line; do
+        if echo "$line" | grep -q "disabled"; then
+            echo -e "${YELLOW}- WiFi ya está desactivado${NC}"
+        else
+            uci set wireless.@wifi-iface[0].disabled='1'
+            uci set wireless.@wifi-device[0].disabled='1'
+            uci commit wireless
+            echo -e "${GREEN}- WiFi desactivado${NC}"
+            break
+        fi
+    done
+else
+    echo -e "${YELLOW}- No se encontró configuración WiFi${NC}"
+fi
+
+# Configurar bridge e interfaz VPN con eth0 y tap0 (sin DHCP)
 echo -e "${YELLOW}- Configurando bridge br-vpn con eth0 y tap0...${NC}"
 
 # Crear backup de la configuración de red
@@ -140,18 +160,18 @@ else
     echo -e "${GREEN}- Puertos del bridge br-vpn actualizados a eth0 y tap0${NC}"
 fi
 
-# Verificar y configurar la interfaz VPN
+# Verificar y configurar la interfaz VPN (sin DHCP)
 if ! uci show network.vpn > /dev/null 2>&1; then
-    echo -e "${YELLOW}- Configurando interfaz VPN...${NC}"
+    echo -e "${YELLOW}- Configurando interfaz VPN (sin DHCP)...${NC}"
     uci set network.vpn=interface
-    uci set network.vpn.proto='dhcp'
+    uci set network.vpn.proto='none'
     uci set network.vpn.device='br-vpn'
-    echo -e "${GREEN}- Interfaz VPN configurada con DHCP${NC}"
+    echo -e "${GREEN}- Interfaz VPN configurada sin DHCP${NC}"
 else
     echo -e "${YELLOW}- La interfaz VPN ya existe, actualizando...${NC}"
-    uci set network.vpn.proto='dhcp'
+    uci set network.vpn.proto='none'
     uci set network.vpn.device='br-vpn'
-    echo -e "${GREEN}- Interfaz VPN actualizada${NC}"
+    echo -e "${GREEN}- Interfaz VPN actualizada sin DHCP${NC}"
 fi
 
 # Configurar IGMP snooping para br-lan si no existe
@@ -165,6 +185,7 @@ fi
 echo -e "${YELLOW}- Aplicando cambios de configuración...${NC}"
 uci commit network
 uci commit openvpn
+uci commit wireless
 echo -e "${GREEN}- Cambios de configuración aplicados${NC}"
 
 # Mostrar la configuración aplicada
@@ -173,6 +194,8 @@ echo -e "Bridge br-vpn:"
 uci show network.br-vpn
 echo -e "Interfaz VPN:"
 uci show network.vpn
+echo -e "WiFi:"
+uci show wireless | grep disabled
 
 # Iniciar y habilitar OpenVPN
 echo -e "${YELLOW}- Iniciando servicio OpenVPN...${NC}"
@@ -186,8 +209,9 @@ echo -e "\n${GREEN}=== RESUMEN DE CONFIGURACIÓN ==="
 echo -e "✓ Paquetes instalados"
 echo -e "✓ Archivo client.ovpn configurado"
 echo -e "✓ Configuración de OpenVPN creada"
+echo -e "✓ WiFi desactivado"
 echo -e "✓ Bridge br-vpn configurado con eth0 y tap0"
-echo -e "✓ Interfaz VPN creada con DHCP"
+echo -e "✓ Interfaz VPN creada sin DHCP"
 echo -e "✓ Servicio OpenVPN iniciado"
 echo -e "==============================${NC}\n"
 
@@ -220,14 +244,15 @@ ifconfig | grep "br-"
 
 echo -e "\n${YELLOW}PRÓXIMOS PASOS:${NC}"
 echo -e "1. El bridge br-vpn combina eth0 (física) + tap0 (VPN)"
-echo -e "2. La interfaz VPN usará br-vpn como dispositivo"
-echo -e "3. Verificar configuración: uci show network.br-vpn"
-echo -e "4. Verificar estado OpenVPN: /etc/init.d/openvpn status"
-echo -e "5. Verificar bridge: brctl show (si está disponible)"
+echo -e "2. La interfaz VPN está configurada sin DHCP"
+echo -e "3. WiFi desactivado"
+echo -e "4. Verificar configuración: uci show network.br-vpn"
+echo -e "5. Verificar estado OpenVPN: /etc/init.d/openvpn status"
 
 # Preguntar si desea reiniciar para asegurar que la interfaz se cree
 echo -e "\n${YELLOW}¿Desea reiniciar el dispositivo para aplicar todos los cambios? (s/n)${NC}"
 echo -e "${YELLOW}(Recomendado para crear el bridge br-vpn correctamente)${NC}"
+# Leer sin esperar Enter
 read -r response
 case "$response" in
     [sS]|[sS][iI]|[yY]|[yY][eE][sS])
@@ -242,7 +267,8 @@ case "$response" in
 esac
 
 echo -e "\n${GREEN}¡Configuración completada!${NC}"
-echo -e "${YELLOW}Recordatorio: El bridge br-vpn ahora combina:${NC}"
-echo -e "  - eth0 (interfaz física)"
-echo -e "  - tap0 (interfaz VPN)"
-echo -e "  - Ambos estarán en la misma interfaz bridge br-vpn"
+echo -e "${YELLOW}Resumen final:${NC}"
+echo -e "  - Bridge br-vpn: eth0 + tap0"
+echo -e "  - Interfaz VPN: sin DHCP"
+echo -e "  - WiFi: desactivado"
+echo -e "  - OpenVPN: iniciado y habilitado"
