@@ -7,6 +7,13 @@ echo "       BR-VPN + DUCKDNS EDITABLE - CRIS"
 echo "================================================"
 echo ""
 
+echo ""
+echo "================================================"
+echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
+echo "           DUCKDNS EDITABLE - CRIS"
+echo "================================================"
+echo ""
+
 # INSTRUCCIONES PREVIAS DUCKDNS
 echo "🦆 CONFIGURACIÓN PREVIA DUCKDNS"
 echo "------------------------------"
@@ -46,16 +53,21 @@ echo "-----------------------"
 echo "Puerto OpenVPN (1194): "
 read VPN_PORT
 VPN_PORT=${VPN_PORT:-1194}
-echo "Número de clientes (4): "
+echo "Número de clientes (1-8): "
 read NUM_CLIENTES
-NUM_CLIENTES=${NUM_CLIENTES:-4}
+
+# Validar que el número de clientes esté entre 1 y 8
+if [ -z "$NUM_CLIENTES" ] || [ "$NUM_CLIENTES" -lt 1 ] || [ "$NUM_CLIENTES" -gt 8 ]; then
+    echo "❌ Número de clientes debe ser entre 1 y 8"
+    exit 1
+fi
 
 echo ""
 echo "📍 RESUMEN:"
 echo "   DuckDNS: $DDNS_SERVER"
 echo "   Servidor: $DDNS_SERVER:$VPN_PORT"
 echo "   Clientes: $NUM_CLIENTES"
-echo "   Interfaz: br-vpn"
+echo "   Interfaz: tap0 (sin bridge)"
 echo ""
 
 echo "¿Continuar con la instalación? (s/n): "
@@ -111,14 +123,13 @@ if [ -n "$DUCKDNS_SERVICE" ]; then
     echo "   [DONE] DuckDNS configurado automáticamente"
     echo "      └─ Dominio: $DDNS_SERVER"
     echo "      └─ Usuario: $DUCKDNS_DOMAIN"
-    echo "      └─ Check Unit: seconds"
 else
     echo "⚠️ No se encontró servicio DuckDNS existente"
     echo "🔹 Configura DuckDNS manualmente en LuCI después de la instalación"
 fi
 echo ""
 
-# 3. GENERACIÓN DE CERTIFICADOS
+# 3. GENERACIÓN DE CERTIFICADOS (HASTA 8 CLIENTES)
 echo "🔐 PASO 3: GENERANDO CERTIFICADOS..."
 echo "-----------------------------------"
 cd /etc/easy-rsa
@@ -135,17 +146,17 @@ echo "   [....] Creando certificado del servidor..."
 echo -e "yes" | easyrsa build-server-full server nopass > /dev/null 2>&1
 echo "   [DONE] Certificado del servidor generado"
 
-echo "   [....] Creando certificados de clientes..."
+echo "   [....] Creando certificados de clientes ($NUM_CLIENTES clientes)..."
 for i in $(seq 1 $NUM_CLIENTES); do
     echo -e "yes" | easyrsa build-client-full client$i nopass > /dev/null 2>&1
     echo "      └─ Cliente $i ✅"
 done
-echo "   [DONE] Certificados de clientes generados"
+echo "   [DONE] $NUM_CLIENTES certificados de clientes generados"
 
 echo "   [....] Generando parámetros Diffie-Hellman..."
 echo "        ⏳ Esto puede tomar 2-5 minutos en dispositivos lentos"
 echo "        ⏳ Por favor espere..."
-easyrsa gen-dh
+easyrsa gen-dh > /dev/null 2>&1
 echo "   [DONE] Parámetros Diffie-Hellman generados"
 
 echo "✅ Todos los certificados generados correctamente"
@@ -174,6 +185,16 @@ config openvpn 'VPN_Server'
     option cert '/etc/openvpn/server.crt'
     option key '/etc/openvpn/server.key'
     option dh '/etc/openvpn/dh.pem'
+    option server_bridge '10.8.0.1 255.255.255.0 10.8.0.2 10.8.0.254'
+    option keepalive '10 120'
+    option cipher 'AES-256-GCM'
+    option user 'nobody'
+    option group 'nogroup'
+    option persist_key '1'
+    option persist_tun '1'
+    option verb '3'
+    option duplicate_cn '1'
+    option client_to_client '1'
 CFG
 echo "   [DONE] Servidor OpenVPN configurado"
 
@@ -191,36 +212,28 @@ uci commit firewall > /dev/null 2>&1
 /etc/init.d/firewall reload > /dev/null 2>&1
 echo "   [DONE] Firewall configurado"
 
-# 6. CREAR BRIDGE BR-VPN
-echo "🔧 PASO 6: CREANDO BRIDGE BR-VPN..."
+# 6. CREAR SOLO INTERFAZ TAP0 (SIN BRIDGE)
+echo "🔧 PASO 6: CREANDO INTERFAZ TAP0..."
 echo "----------------------------------"
 echo "   [....] Creando interfaz tap0..."
 ip tuntap add mode tap tap0
 ifconfig tap0 up
 echo "   [DONE] Interfaz tap0 creada"
 
-echo "   [....] Creando bridge br-vpn..."
-brctl addbr br-vpn
-brctl addif br-vpn tap0
-ifconfig br-vpn up
-echo "   [DONE] Bridge br-vpn creado"
-
 echo "   [....] Configurando persistencia..."
-uci set network.br-vpn=device
-uci set network.br-vpn.type='bridge'
-uci set network.br-vpn.name='br-vpn'
-uci add_list network.br-vpn.ports='tap0'
-uci set network.br-vpn.igmp_snooping='1'
+# Solo creamos la interfaz tap0, sin bridge
+cat >> /etc/config/network << NETCFG
 
-uci set network.vpn=interface
-uci set network.vpn.proto='none'
-uci set network.vpn.device='br-vpn'
+config device
+    option name 'tap0'
+    option type 'tap'
+NETCFG
 
 uci commit network > /dev/null 2>&1
 echo "   [DONE] Configuración persistente aplicada"
 
-# 7. GENERAR Y MOSTRAR ARCHIVOS CLIENTE
-echo "📄 PASO 7: GENERANDO Y MOSTRANDO ARCHIVOS CLIENTE..."
+# 7. GENERAR Y MOSTRAR ARCHIVOS CLIENTE (HASTA 8 CLIENTES)
+echo "📄 PASO 7: GENERANDO Y MOSTRAR ARCHIVOS CLIENTE..."
 echo "--------------------------------------------------"
 mkdir -p /etc/openvpn/clients
 
@@ -264,10 +277,15 @@ OVPN
     echo "   ================================================="
     echo ""
     echo "   💡 Puedes copiar el contenido anterior ahora"
-    echo "   ⏸️  Pausa... Presiona ENTER para continuar con el siguiente cliente"
-    read
+    if [ $i -lt $NUM_CLIENTES ]; then
+        echo "   ⏸️  Pausa... Presiona ENTER para continuar con el siguiente cliente"
+        read
+    else
+        echo "   ✅ Último cliente mostrado"
+    fi
 done
 
+echo ""
 echo "✅ Todos los archivos .ovpn generados y mostrados"
 echo "   📍 Acceso inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
 echo "   📍 Acceso persistente: /etc/openvpn/clients/"
@@ -319,16 +337,17 @@ else
 fi
 
 # Verificar interfaces
-if ifconfig tap0 >/dev/null 2>&1; then
+if ifconfig tap0 >/dev/null 2>&1;
     echo "   ✅ Interfaz tap0: ACTIVA"
 else
     echo "   ❌ Interfaz tap0: INACTIVA"
 fi
 
+# Verificar que NO existe bridge br-vpn
 if ifconfig br-vpn >/dev/null 2>&1; then
-    echo "   ✅ Bridge br-vpn: ACTIVO"
+    echo "   ⚠️ Bridge br-vpn: EXISTE (no debería estar)"
 else
-    echo "   ❌ Bridge br-vpn: INACTIVO"
+    echo "   ✅ Bridge br-vpn: NO EXISTE (correcto)"
 fi
 
 # Verificar archivos
@@ -353,21 +372,17 @@ echo "🖥️ INFORMACIÓN DEL SERVIDOR:"
 echo "   ┌─ Dominio: $DDNS_SERVER"
 echo "   ├─ Puerto: $VPN_PORT"
 echo "   ├─ Protocolo: UDP"
-echo "   └─ Bridge: br-vpn"
+echo "   └─ Interfaz: tap0 (sin bridge)"
 echo ""
-echo "👤 ARCHIVOS DE CLIENTE:"
-echo "   ┌─ Inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
-echo "   └─ Persistente: /etc/openvpn/clients/"
-echo ""
-echo "📋 RESUMEN DE CLIENTES CREADOS:"
+echo "👤 ARCHIVOS DE CLIENTE CREADOS ($NUM_CLIENTES):"
 for i in $(seq 1 $NUM_CLIENTES); do
-    echo "   └─ client$i.ovpn"
+    echo "   ├─ client$i.ovpn"
 done
+echo "   └─ Total: $NUM_CLIENTES clientes"
 echo ""
-echo "📥 IMPORTANTE:"
-echo "   • Los archivos en /tmp/ se pierden al reiniciar"
-echo "   • Los archivos en /etc/openvpn/clients/ son permanentes"
-echo "   • Ya has visto el contenido de todos los archivos .ovpn"
+echo "📁 UBICACIÓN DE ARCHIVOS:"
+echo "   ┌─ Temporal: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   └─ Persistente: /etc/openvpn/clients/"
 echo ""
 
 echo "----------------------------------------"
