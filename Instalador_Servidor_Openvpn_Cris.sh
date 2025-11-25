@@ -3,7 +3,7 @@
 echo ""
 echo "================================================"
 echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
-echo "       BR-VPN + DUCKDNS EDITABLE"
+echo "       BR-VPN + DUCKDNS EDITABLE - CRIS"
 echo "================================================"
 echo ""
 
