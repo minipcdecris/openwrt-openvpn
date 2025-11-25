@@ -3,7 +3,7 @@
 echo ""
 echo "================================================"
 echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
-echo "       BR-VPN + DUCKDNS EDITABLE - CRIS"
+echo "           DUCKDNS EDITABLE - CRIS"
 echo "================================================"
 echo ""
 
@@ -284,8 +284,90 @@ echo "   📍 Acceso inmediato: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
 echo "   📍 Acceso persistente: /etc/openvpn/clients/"
 echo ""
 
-# 8. INICIAR SERVICIOS
-echo "🚀 PASO 8: INICIANDO SERVICIOS..."
+# 8. CREAR ARCHIVO MAESTRO CON TODOS LOS CLIENTES
+echo "📚 PASO 8: CREANDO ARCHIVO MAESTRO..."
+echo "------------------------------------"
+echo "   [....] Generando archivo maestro con todos los clientes..."
+
+# Crear archivo maestro
+MASTER_FILE="/etc/openvpn/clients/ALL_CLIENTS_MASTER.txt"
+cat > "$MASTER_FILE" << MASTER_HEADER
+=================================================
+    ARCHIVO MAESTRO - TODOS LOS CLIENTES OPENVPN
+    Servidor: $DDNS_SERVER:$VPN_PORT
+    Fecha: $(date)
+    Total clientes: $NUM_CLIENTES
+=================================================
+
+INSTRUCCIONES:
+- Este archivo contiene TODOS los clientes OpenVPN
+- Separa cada cliente en archivos individuales .ovpn
+- Cada sección está claramente marcada
+
+MASTER_HEADER
+
+# Añadir cada cliente al archivo maestro
+for i in $(seq 1 $NUM_CLIENTES); do
+    cat >> "$MASTER_FILE" << CLIENT_SECTION
+
+╔══════════════════════════════════════════════════════════════════╗
+║                         CLIENTE $i                               ║
+╠══════════════════════════════════════════════════════════════════╣
+$(cat /etc/openvpn/clients/client$i.ovpn)
+╠══════════════════════════════════════════════════════════════════╣
+║                         FIN CLIENTE $i                           ║
+╚══════════════════════════════════════════════════════════════════╝
+
+CLIENT_SECTION
+done
+
+# Añadir resumen final
+cat >> "$MASTER_FILE" << RESUMEN
+
+=================================================
+                 RESUMEN FINAL
+=================================================
+Total clientes generados: $NUM_CLIENTES
+Archivos individuales: client1.ovpn - client$NUM_CLIENTES.ovpn
+Ubicación: /etc/openvpn/clients/
+Servidor: $DDNS_SERVER:$VPN_PORT
+Protocolo: UDP (tap)
+Fecha generación: $(date)
+=================================================
+RESUMEN
+
+cp "$MASTER_FILE" "/tmp/ALL_CLIENTS_MASTER.txt"
+echo "   [DONE] Archivo maestro generado: $MASTER_FILE"
+echo ""
+
+# 9. MOSTRAR ARCHIVO MAESTRO EN PANTALLA
+echo "📖 MOSTRANDO ARCHIVO MAESTRO COMPLETO..."
+echo "========================================"
+echo ""
+echo "📋 A continuación se muestra el ARCHIVO MAESTRO completo"
+echo "   que contiene TODOS los clientes ($NUM_CLIENTES clientes)"
+echo ""
+echo "💡 INSTRUCCIONES:"
+echo "   1. Desplázate hacia abajo para ver todo el contenido"
+echo "   2. Puedes copiar secciones individuales o todo el archivo"
+echo "   3. Cada cliente está claramente separado"
+echo ""
+echo "🔄 Mostrando contenido... (puede ser largo)"
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║                    INICIO ARCHIVO MAESTRO                        ║"
+echo "╠══════════════════════════════════════════════════════════════════╣"
+cat "/tmp/ALL_CLIENTS_MASTER.txt"
+echo "╠══════════════════════════════════════════════════════════════════╣"
+echo "║                     FIN ARCHIVO MAESTRO                          ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "✅ Archivo maestro mostrado completamente"
+echo "📍 También disponible en: /etc/openvpn/clients/ALL_CLIENTS_MASTER.txt"
+echo ""
+
+# 10. INICIAR SERVICIOS
+echo "🚀 PASO 9: INICIANDO SERVICIOS..."
 echo "-------------------------------"
 echo "   [....] Habilitando servicios..."
 /etc/init.d/openvpn enable > /dev/null 2>&1
@@ -303,9 +385,9 @@ sleep 2
 echo "✅ Todos los servicios iniciados correctamente"
 echo ""
 
-# 9. VERIFICACIÓN FINAL
-echo "🔍 PASO 9: VERIFICACIÓN FINAL..."
-echo "-------------------------------"
+# 11. VERIFICACIÓN FINAL
+echo "🔍 PASO 10: VERIFICACIÓN FINAL..."
+echo "--------------------------------"
 echo "   [....] Verificando servicios..."
 echo ""
 
@@ -330,17 +412,10 @@ else
 fi
 
 # Verificar interfaces
-if ifconfig tap0 >/dev/null 2>&1;
+if ifconfig tap0 >/dev/null 2>&1; then
     echo "   ✅ Interfaz tap0: ACTIVA"
 else
     echo "   ❌ Interfaz tap0: INACTIVA"
-fi
-
-# Verificar que NO existe bridge br-vpn
-if ifconfig br-vpn >/dev/null 2>&1; then
-    echo "   ⚠️ Bridge br-vpn: EXISTE (no debería estar)"
-else
-    echo "   ✅ Bridge br-vpn: NO EXISTE (correcto)"
 fi
 
 # Verificar archivos
@@ -354,7 +429,41 @@ for i in $(seq 1 $NUM_CLIENTES); do
     fi
 done
 
+if [ -f "/etc/openvpn/clients/ALL_CLIENTS_MASTER.txt" ]; then
+    echo "   ✅ ALL_CLIENTS_MASTER.txt: ARCHIVO MAESTRO"
+else
+    echo "   ❌ ALL_CLIENTS_MASTER.txt: FALTANTE"
+fi
+
 echo "   [DONE] Verificación completada"
+echo ""
+
+# 12. OPCIONES PARA COPIAR A WINDOWS
+echo "📤 PASO 11: COPIAR ARCHIVOS A WINDOWS"
+echo "======================================"
+echo ""
+ROUTER_IP=$(uci get network.lan.ipaddr 2>/dev/null || ip addr show br-lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 || echo "IP_DEL_ROUTER")
+
+echo "📍 INFORMACIÓN DE CONEXIÓN:"
+echo "   IP del router: $ROUTER_IP"
+echo "   Archivos individuales: /etc/openvpn/clients/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   Archivo maestro: /etc/openvpn/clients/ALL_CLIENTS_MASTER.txt"
+echo ""
+
+echo "🖥️ OPCIONES PARA COPIAR A WINDOWS:"
+echo ""
+echo "1. 📋 SCP (Recomendado - PowerShell):"
+echo "   # Todos los archivos individuales:"
+echo "   scp root@$ROUTER_IP:/etc/openvpn/clients/client*.ovpn %USERPROFILE%\\Desktop\\"
+echo "   # Archivo maestro:"
+echo "   scp root@$ROUTER_IP:/etc/openvpn/clients/ALL_CLIENTS_MASTER.txt %USERPROFILE%\\Desktop\\"
+echo ""
+echo "2. 🖱️ WinSCP (Interfaz Gráfica):"
+echo "   - Descarga: https://winscp.net"
+echo "   - Conecta a: $ROUTER_IP"
+echo "   - Usuario: root"
+echo "   - Navega a: /etc/openvpn/clients/"
+echo "   - Arrastra los archivos a tu escritorio"
 echo ""
 
 echo "----------------------------------------"
@@ -367,14 +476,12 @@ echo "   ├─ Puerto: $VPN_PORT"
 echo "   ├─ Protocolo: UDP"
 echo "   └─ Interfaz: tap0 (sin bridge)"
 echo ""
-echo "👤 ARCHIVOS DE CLIENTE CREADOS ($NUM_CLIENTES):"
-for i in $(seq 1 $NUM_CLIENTES); do
-    echo "   ├─ client$i.ovpn"
-done
-echo "   └─ Total: $NUM_CLIENTES clientes"
+echo "👤 ARCHIVOS GENERADOS:"
+echo "   ┌─ Individuales: client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "   └─ Maestro: ALL_CLIENTS_MASTER.txt (todos en uno)"
 echo ""
-echo "📁 UBICACIÓN DE ARCHIVOS:"
-echo "   ┌─ Temporal: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+echo "📁 UBICACIÓN:"
+echo "   ┌─ Temporal: /tmp/"
 echo "   └─ Persistente: /etc/openvpn/clients/"
 echo ""
 
@@ -402,8 +509,10 @@ else
     echo ""
     echo "💡 Sistema mantenido sin reiniciar"
     echo "📍 Archivos disponibles en:"
-    echo "   - /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn (temporal)"
-    echo "   - /etc/openvpn/clients/ (persistente)"
+    echo "   - Individuales: /tmp/client1.ovpn - client$NUM_CLIENTES.ovpn"
+    echo "   - Maestro: /tmp/ALL_CLIENTS_MASTER.txt"
+    echo "   - Persistente: /etc/openvpn/clients/"
     echo ""
+    echo "💡 Ya has visto el ARCHIVO MAESTRO completo en pantalla"
     echo "🔹 Recuerda reiniciar manualmente más tarde"
 fi
