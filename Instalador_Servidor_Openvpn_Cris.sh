@@ -7,13 +7,6 @@ echo "       BR-VPN + DUCKDNS EDITABLE - CRIS"
 echo "================================================"
 echo ""
 
-echo ""
-echo "================================================"
-echo "    INSTALADOR SERVIDOR OPENVPN - COMPLETO"
-echo "           DUCKDNS EDITABLE - CRIS"
-echo "================================================"
-echo ""
-
 # INSTRUCCIONES PREVIAS DUCKDNS
 echo "🦆 CONFIGURACIÓN PREVIA DUCKDNS"
 echo "------------------------------"
