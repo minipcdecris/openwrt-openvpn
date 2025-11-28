@@ -37,24 +37,6 @@ verify_tr3000() {
     echo -e "${GREEN}- Cudy TR3000 confirmado${NC}"
 }
 
-# Detectar interfaz WAN para TR3000
-detect_wan_interface() {
-    echo -e "${YELLOW}- Detectando interfaz WAN para TR3000...${NC}"
-    
-    # Para TR3000 con DSA, detectar la interfaz WAN correcta
-    if ip link show | grep -q "wan"; then
-        WAN_INTERFACE=$(ip link show | grep "wan" | head -1 | cut -d: -f2 | tr -d ' ')
-        echo -e "${GREEN}- Interfaz WAN detectada: $WAN_INTERFACE${NC}"
-    elif uci get network.wan.ifname >/dev/null 2>&1; then
-        WAN_INTERFACE=$(uci get network.wan.ifname)
-        echo -e "${GREEN}- Interfaz WAN configurada: $WAN_INTERFACE${NC}"
-    else
-        # Para TR3000, la interfaz física suele ser eth0
-        WAN_INTERFACE="eth0"
-        echo -e "${YELLOW}- Usando interfaz WAN por defecto: $WAN_INTERFACE${NC}"
-    fi
-}
-
 # Verificar compatibilidad
 check_compatibility() {
     echo -e "${YELLOW}- Verificando compatibilidad...${NC}"
@@ -96,31 +78,48 @@ configure_tr3000_bridge() {
     
     echo -e "${YELLOW}- Creando dispositivo bridge br-vpn...${NC}"
     
-    # Crear el dispositivo bridge
+    # Crear el dispositivo bridge con todos los parámetros necesarios
     uci set network.br-vpn=device
-    uci set network.br-vpn.type='bridge'
     uci set network.br-vpn.name='br-vpn'
+    uci set network.br-vpn.type='bridge'
     
-    # Agregar puertos al bridge - eth0 y tap0
+    # Configurar puertos del bridge - eth0 y tap0
     echo -e "${YELLOW}- Agregando puertos eth0 y tap0 al bridge...${NC}"
-    uci delete network.br-vpn.ports 2>/dev/null
-    uci add_list network.br-vpn.ports='eth0'
-    uci add_list network.br-vpn.ports='tap0'
+    uci delete network.br_vpn.ports 2>/dev/null
+    uci set network.br_vpn.ports='eth0 tap0'
     
     # Configurar opciones del bridge
+    uci set network.br-vpn.enabled='1'
     uci set network.br-vpn.ipv6='0'
     uci set network.br-vpn.igmp_snooping='1'
     uci set network.br-vpn.stp='0'
     uci set network.br-vpn.forward_delay='0'
+    uci set network.br-vpn.bridge_empty='1'
     
-    echo -e "${GREEN}- Dispositivo bridge br-vpn creado con puertos: eth0, tap0${NC}"
+    echo -e "${GREEN}- Dispositivo bridge br-vpn creado${NC}"
+    echo -e "${GREEN}- Puertos configurados: eth0 tap0${NC}"
     
-    # Configurar interfaz VPN que usa el bridge
+    # Configurar interfaz que usa el bridge
     uci set network.vpn=interface
     uci set network.vpn.proto='none'
     uci set network.vpn.device='br-vpn'
     
     echo -e "${GREEN}- Interfaz VPN configurada en br-vpn${NC}"
+}
+
+# Verificar y configurar TAP manualmente si es necesario
+setup_tap_interface() {
+    echo -e "${YELLOW}- Configurando interfaz TAP...${NC}"
+    
+    # Crear interfaz tap0 si no existe
+    if ! ip link show tap0 >/dev/null 2>&1; then
+        echo -e "${YELLOW}- Creando interfaz tap0...${NC}"
+        ip tuntap add mode tap tap0
+        ip link set tap0 up
+        echo -e "${GREEN}- Interfaz tap0 creada y activada${NC}"
+    else
+        echo -e "${GREEN}- Interfaz tap0 ya existe${NC}"
+    fi
 }
 
 # Crear client.ovpn interactivo
@@ -145,6 +144,16 @@ EOF
         exit 1
     fi
     
+    # Asegurarse de que use TAP
+    if ! grep -q "dev tap" /etc/openvpn/client.ovpn && ! grep -q "dev tap0" /etc/openvpn/client.ovpn; then
+        echo -e "${YELLOW}- Añadiendo configuración dev tap0 al archivo client.ovpn...${NC}"
+        echo "" >> /etc/openvpn/client.ovpn
+        echo "# Configuración añadida automáticamente" >> /etc/openvpn/client.ovpn
+        echo "dev tap0" >> /etc/openvpn/client.ovpn
+        echo "persist-tun" >> /etc/openvpn/client.ovpn
+        echo "persist-key" >> /etc/openvpn/client.ovpn
+    fi
+    
     echo -e "${GREEN}- client.ovpn creado exitosamente${NC}"
 }
 
@@ -152,23 +161,26 @@ EOF
 configure_openvpn() {
     echo -e "${YELLOW}- Configurando servicio OpenVPN...${NC}"
     
+    # Instalar paquetes necesarios para TAP
+    echo -e "${YELLOW}- Instalando soporte para interfaces TAP...${NC}"
+    opkg install kmod-tun
+    
     if [ ! -f /etc/config/openvpn ]; then
         cat <<EOF > /etc/config/openvpn
-config openvpn 'VPN_Tap_Client'
-    option config '/etc/openvpn/client.ovpn'
+config openvpn 'custom_vpn'
     option enabled '1'
-    option dev 'tap0'
-    option dev_type 'tap'
+    option config '/etc/openvpn/client.ovpn'
+
 EOF
     else
-        uci set openvpn.VPN_Tap_Client=openvpn
-        uci set openvpn.VPN_Tap_Client.config='/etc/openvpn/client.ovpn'
-        uci set openvpn.VPN_Tap_Client.enabled='1'
-        uci set openvpn.VPN_Tap_Client.dev='tap0'
-        uci set openvpn.VPN_Tap_Client.dev_type='tap'
-        uci commit openvpn
+        # Limpiar configuraciones previas de openvpn
+        uci delete openvpn.custom_vpn 2>/dev/null
+        uci set openvpn.custom_vpn=openvpn
+        uci set openvpn.custom_vpn.enabled='1'
+        uci set openvpn.custom_vpn.config='/etc/openvpn/client.ovpn'
     fi
     
+    uci commit openvpn
     echo -e "${GREEN}- Configuración OpenVPN completada${NC}"
 }
 
@@ -183,6 +195,7 @@ disable_wifi() {
                 uci set wireless.$device.disabled='1' 2>/dev/null
                 echo -e "${GREEN}- WiFi $device desactivado${NC}"
             done
+            uci commit wireless
         else
             echo -e "${YELLOW}- No se encontraron dispositivos WiFi${NC}"
         fi
@@ -197,9 +210,11 @@ apply_configuration() {
     
     uci commit network
     uci commit openvpn
-    if [ -f /etc/config/wireless ]; then
-        uci commit wireless
-    fi
+    
+    # Recargar configuración de red
+    echo -e "${YELLOW}- Recargando configuración de red...${NC}"
+    /etc/init.d/network reload
+    sleep 3
     
     echo -e "${GREEN}- Configuración aplicada${NC}"
 }
@@ -208,33 +223,55 @@ apply_configuration() {
 start_services() {
     echo -e "${YELLOW}- Iniciando servicios...${NC}"
     
+    # Asegurarse de que la interfaz TAP esté creada
+    setup_tap_interface
+    
     /etc/init.d/openvpn enable
-    /etc/init.d/openvpn start
+    /etc/init.d/openvpn restart
     check_status
     
     echo -e "${GREEN}- Servicios iniciados${NC}"
+}
+
+# Verificar configuración del bridge
+verify_bridge_config() {
+    echo -e "${YELLOW}- Verificando configuración del bridge...${NC}"
+    
+    # Mostrar configuración UCI
+    echo -e "${YELLOW}- Configuración UCI del bridge:${NC}"
+    uci show network.br-vpn
+    uci show network.br_vpn
+    
+    # Verificar si el bridge existe en el sistema
+    if ip link show br-vpn >/dev/null 2>&1; then
+        echo -e "${GREEN}- Bridge br-vpn creado correctamente${NC}"
+        echo -e "${YELLOW}- Estado del bridge:${NC}"
+        ip link show br-vpn
+    else
+        echo -e "${RED}- ERROR: Bridge br-vpn no se creó${NC}"
+    fi
+    
+    # Verificar puertos del bridge
+    if command -v brctl >/dev/null 2>&1; then
+        echo -e "${YELLOW}- Puertos del bridge:${NC}"
+        brctl show br-vpn
+    else
+        echo -e "${YELLOW}- Información de puertos (alternativa):${NC}"
+        ip link show master br-vpn 2>/dev/null || echo "No se puede obtener información de puertos"
+    fi
 }
 
 # Mostrar resumen final
 show_summary() {
     echo -e "\n${GREEN}=== CONFIGURACIÓN COMPLETADA PARA CUDY TR3000 ===${NC}"
     echo -e "Dispositivo bridge: br-vpn"
-    echo -e "Puertos del bridge: eth0, tap0"
+    echo -e "Puertos configurados: eth0 tap0"
     echo -e "Interfaz VPN: br-vpn"
     echo -e "OpenVPN: activado y ejecutándose"
     echo -e "WiFi: desactivado"
     
-    echo -e "\n${YELLOW}- Estado del bridge br-vpn:${NC}"
-    brctl show br-vpn 2>/dev/null || {
-        echo -e "${YELLOW}- Comando brctl no disponible, mostrando interfaces...${NC}"
-        ip link show br-vpn
-    }
-    
-    echo -e "\n${YELLOW}- Interfaces de red:${NC}"
-    ip link show | grep -E "(eth0|tap0|br-vpn)" | grep -v "link/"
-    
-    echo -e "\n${YELLOW}- Configuración de puertos del bridge:${NC}"
-    uci show network.br-vpn.ports
+    # Verificación final
+    verify_bridge_config
 }
 
 # Función principal
@@ -252,13 +289,10 @@ main() {
     opkg update
     check_status
     
-    # Instalar OpenVPN
-    echo -e "${YELLOW}- Instalando OpenVPN...${NC}"
-    opkg install openvpn-easy-rsa openvpn-openssl luci-app-openvpn
+    # Instalar OpenVPN y dependencias
+    echo -e "${YELLOW}- Instalando OpenVPN y dependencias...${NC}"
+    opkg install openvpn-openssl luci-app-openvpn kmod-tun
     check_status
-    
-    # Detectar interfaz WAN
-    detect_wan_interface
     
     # Configurar client.ovpn
     if [ -f /etc/openvpn/client.ovpn ]; then
