@@ -110,8 +110,8 @@ create_bridge_device() {
     uci set network.@device[-1].name='br-vpn'
     uci set network.@device[-1].type='bridge'
     
-    # Solo usar eth1 para WAN en el bridge VPN, NO eth0
-    uci set network.@device[-1].ports='eth1 tap0'
+    # Solo usar eth0 para WAN en el bridge VPN, NO eth1
+    uci set network.@device[-1].ports='eth0 tap0'
     
     uci set network.@device[-1].ipv6='0'
     uci set network.@device[-1].igmp_snooping='1'
@@ -119,8 +119,8 @@ create_bridge_device() {
     uci set network.@device[-1].forward_delay='0'
     uci set network.@device[-1].enabled='1'
     
-    echo -e "${GREEN}- Dispositivo bridge br-vpn creado con puertos: eth1 tap0${NC}"
-    echo -e "${YELLOW}- NOTA: eth0 se mantiene para la LAN${NC}"
+    echo -e "${GREEN}- Dispositivo bridge br-vpn creado con puertos: eth0 tap0${NC}"
+    echo -e "${YELLOW}- NOTA: eth1 se mantiene para la LAN${NC}"
 }
 
 # Configurar interfaces de red manteniendo accesibilidad
@@ -149,7 +149,7 @@ configure_network_interfaces() {
     
     echo -e "${GREEN}- Interfaces de red configuradas${NC}"
     echo -e "${GREEN}- LAN: 192.168.1.2 en br-lan${NC}"
-    echo -e "${GREEN}- WAN: br-vpn (eth1 + tap0)${NC}"
+    echo -e "${GREEN}- WAN: br-vpn (eth0 + tap0)${NC}"
 }
 
 # Verificar y configurar TAP manualmente
@@ -311,7 +311,7 @@ verify_bridge_config() {
 show_summary() {
     echo -e "\n${GREEN}=== CONFIGURACIÓN COMPLETADA PARA CUDY TR3000 ===${NC}"
     echo -e "${GREEN}- Dispositivo bridge: br-vpn${NC}"
-    echo -e "${GREEN}- Puertos del bridge: eth1 tap0${NC}"
+    echo -e "${GREEN}- Puertos del bridge: eth0 tap0${NC}"
     echo -e "${GREEN}- Interfaz VPN: br-vpn${NC}"
     echo -e "${GREEN}- OpenVPN: activado y ejecutándose${NC}"
     echo -e "${GREEN}- WiFi: desactivado${NC}"
@@ -319,8 +319,8 @@ show_summary() {
     
     echo -e "\n${YELLOW}=== IMPORTANTE ===${NC}"
     echo -e "${YELLOW}- El dispositivo sigue accesible en: ${GREEN}http://192.168.1.2${NC}"
-    echo -e "${YELLOW}- eth0 se mantiene en br-lan para la LAN${NC}"
-    echo -e "${YELLOW}- eth1 se usa para WAN en el bridge VPN${NC}"
+    echo -e "${YELLOW}- eth1 se mantiene en br-lan para la LAN${NC}"
+    echo -e "${YELLOW}- eth0 se usa para WAN en el bridge VPN${NC}"
     
     # Verificación final
     verify_bridge_config
