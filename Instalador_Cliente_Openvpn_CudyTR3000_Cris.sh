@@ -68,38 +68,29 @@ check_compatibility() {
     echo -e "${GREEN}- Cudy TR3000 compatible${NC}"
 }
 
-# Configurar bridge específico para TR3000
-configure_tr3000_bridge() {
-    echo -e "${YELLOW}- Configurando bridge br-vpn para TR3000...${NC}"
-    
-    # Eliminar configuraciones previas si existen
-    uci delete network.br-vpn 2>/dev/null
-    uci delete network.vpn 2>/dev/null
-    
+# Crear bridge br-vpn en la sección de dispositivos
+create_bridge_device() {
     echo -e "${YELLOW}- Creando dispositivo bridge br-vpn...${NC}"
     
-    # Crear el dispositivo bridge con todos los parámetros necesarios
-    uci set network.br-vpn=device
-    uci set network.br-vpn.name='br-vpn'
-    uci set network.br-vpn.type='bridge'
+    # Primero eliminar cualquier configuración previa
+    uci delete network.br-vpn 2>/dev/null
+    uci delete network.@device[0] 2>/dev/null
     
-    # Configurar puertos del bridge - eth0 y tap0
-    echo -e "${YELLOW}- Agregando puertos eth0 y tap0 al bridge...${NC}"
-    uci delete network.br_vpn.ports 2>/dev/null
-    uci set network.br_vpn.ports='eth0 tap0'
+    # Crear nuevo dispositivo bridge
+    uci add network device
+    uci set network.@device[-1].name='br-vpn'
+    uci set network.@device[-1].type='bridge'
+    uci set network.@device[-1].ports='eth0 tap0'
+    uci set network.@device[-1].ipv6='0'
+    uci set network.@device[-1].igmp_snooping='1'
+    uci set network.@device[-1].stp='0'
+    uci set network.@device[-1].forward_delay='0'
+    uci set network.@device[-1].enabled='1'
     
-    # Configurar opciones del bridge
-    uci set network.br-vpn.enabled='1'
-    uci set network.br-vpn.ipv6='0'
-    uci set network.br-vpn.igmp_snooping='1'
-    uci set network.br-vpn.stp='0'
-    uci set network.br-vpn.forward_delay='0'
-    uci set network.br-vpn.bridge_empty='1'
-    
-    echo -e "${GREEN}- Dispositivo bridge br-vpn creado${NC}"
-    echo -e "${GREEN}- Puertos configurados: eth0 tap0${NC}"
+    echo -e "${GREEN}- Dispositivo bridge br-vpn creado con puertos: eth0 tap0${NC}"
     
     # Configurar interfaz que usa el bridge
+    uci delete network.vpn 2>/dev/null
     uci set network.vpn=interface
     uci set network.vpn.proto='none'
     uci set network.vpn.device='br-vpn'
@@ -107,9 +98,16 @@ configure_tr3000_bridge() {
     echo -e "${GREEN}- Interfaz VPN configurada en br-vpn${NC}"
 }
 
-# Verificar y configurar TAP manualmente si es necesario
+# Verificar y configurar TAP manualmente
 setup_tap_interface() {
     echo -e "${YELLOW}- Configurando interfaz TAP...${NC}"
+    
+    # Instalar kmod-tun si no está instalado
+    if ! opkg list-installed | grep -q kmod-tun; then
+        echo -e "${YELLOW}- Instalando kmod-tun...${NC}"
+        opkg update
+        opkg install kmod-tun
+    fi
     
     # Crear interfaz tap0 si no existe
     if ! ip link show tap0 >/dev/null 2>&1; then
@@ -119,6 +117,7 @@ setup_tap_interface() {
         echo -e "${GREEN}- Interfaz tap0 creada y activada${NC}"
     else
         echo -e "${GREEN}- Interfaz tap0 ya existe${NC}"
+        ip link set tap0 up
     fi
 }
 
@@ -160,10 +159,6 @@ EOF
 # Configurar OpenVPN
 configure_openvpn() {
     echo -e "${YELLOW}- Configurando servicio OpenVPN...${NC}"
-    
-    # Instalar paquetes necesarios para TAP
-    echo -e "${YELLOW}- Instalando soporte para interfaces TAP...${NC}"
-    opkg install kmod-tun
     
     if [ ! -f /etc/config/openvpn ]; then
         cat <<EOF > /etc/config/openvpn
@@ -238,26 +233,31 @@ verify_bridge_config() {
     echo -e "${YELLOW}- Verificando configuración del bridge...${NC}"
     
     # Mostrar configuración UCI
-    echo -e "${YELLOW}- Configuración UCI del bridge:${NC}"
-    uci show network.br-vpn
-    uci show network.br_vpn
+    echo -e "${YELLOW}- Configuración UCI del dispositivo bridge:${NC}"
+    uci show network.@device[0]
     
     # Verificar si el bridge existe en el sistema
     if ip link show br-vpn >/dev/null 2>&1; then
         echo -e "${GREEN}- Bridge br-vpn creado correctamente${NC}"
         echo -e "${YELLOW}- Estado del bridge:${NC}"
         ip link show br-vpn
+        
+        # Verificar puertos del bridge
+        if command -v brctl >/dev/null 2>&1; then
+            echo -e "${YELLOW}- Puertos del bridge:${NC}"
+            brctl show br-vpn
+        else
+            echo -e "${YELLOW}- Información de puertos:${NC}"
+            bridge link show dev eth0 2>/dev/null || echo "eth0 en bridge"
+            bridge link show dev tap0 2>/dev/null || echo "tap0 en bridge"
+        fi
     else
         echo -e "${RED}- ERROR: Bridge br-vpn no se creó${NC}"
-    fi
-    
-    # Verificar puertos del bridge
-    if command -v brctl >/dev/null 2>&1; then
-        echo -e "${YELLOW}- Puertos del bridge:${NC}"
-        brctl show br-vpn
-    else
-        echo -e "${YELLOW}- Información de puertos (alternativa):${NC}"
-        ip link show master br-vpn 2>/dev/null || echo "No se puede obtener información de puertos"
+        echo -e "${YELLOW}- Intentando crear manualmente...${NC}"
+        brctl addbr br-vpn
+        brctl addif br-vpn eth0
+        brctl addif br-vpn tap0
+        ip link set br-vpn up
     fi
 }
 
@@ -272,6 +272,11 @@ show_summary() {
     
     # Verificación final
     verify_bridge_config
+    
+    echo -e "\n${YELLOW}- Para ver en la interfaz web:${NC}"
+    echo -e "  1. Ve a Network → Devices"
+    echo -e "  2. Busca 'br-vpn' en la lista de dispositivos"
+    echo -e "  3. Deberías ver eth0 y tap0 como puertos del bridge"
 }
 
 # Función principal
@@ -309,8 +314,11 @@ main() {
     # Configurar OpenVPN
     configure_openvpn
     
-    # Configurar bridge específico para TR3000
-    configure_tr3000_bridge
+    # Crear dispositivo bridge
+    create_bridge_device
+    
+    # Configurar interfaz TAP
+    setup_tap_interface
     
     # Desactivar WiFi
     disable_wifi
