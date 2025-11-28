@@ -37,6 +37,26 @@ verify_tr3000() {
     echo -e "${GREEN}- Cudy TR3000 confirmado${NC}"
 }
 
+# Obtener configuración de red actual
+get_current_network_config() {
+    echo -e "${YELLOW}- Obteniendo configuración de red actual...${NC}"
+    
+    # Obtener IP actual de la interfaz LAN
+    CURRENT_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null)
+    if [ -z "$CURRENT_LAN_IP" ]; then
+        CURRENT_LAN_IP="192.168.1.1"
+    fi
+    
+    # Obtener interfaz LAN actual
+    CURRENT_LAN_DEVICE=$(uci get network.lan.device 2>/dev/null)
+    if [ -z "$CURRENT_LAN_DEVICE" ]; then
+        CURRENT_LAN_DEVICE="br-lan"
+    fi
+    
+    echo -e "${GREEN}- IP LAN actual: $CURRENT_LAN_IP${NC}"
+    echo -e "${GREEN}- Dispositivo LAN actual: $CURRENT_LAN_DEVICE${NC}"
+}
+
 # Verificar compatibilidad
 check_compatibility() {
     echo -e "${YELLOW}- Verificando compatibilidad...${NC}"
@@ -68,34 +88,68 @@ check_compatibility() {
     echo -e "${GREEN}- Cudy TR3000 compatible${NC}"
 }
 
-# Crear bridge br-vpn en la sección de dispositivos
+# Crear bridge br-vpn sin afectar la LAN
 create_bridge_device() {
     echo -e "${YELLOW}- Creando dispositivo bridge br-vpn...${NC}"
     
-    # Primero eliminar cualquier configuración previa
+    # Primero eliminar cualquier configuración previa del bridge VPN
     uci delete network.br-vpn 2>/dev/null
-    uci delete network.@device[0] 2>/dev/null
     
-    # Crear nuevo dispositivo bridge
+    # Buscar y eliminar dispositivo br-vpn si existe
+    local device_index=0
+    while uci get network.@device[$device_index] >/dev/null 2>&1; do
+        if [ "$(uci get network.@device[$device_index].name 2>/dev/null)" = "br-vpn" ]; then
+            uci delete network.@device[$device_index]
+            break
+        fi
+        device_index=$((device_index + 1))
+    done
+    
+    # Crear nuevo dispositivo bridge para VPN
     uci add network device
     uci set network.@device[-1].name='br-vpn'
     uci set network.@device[-1].type='bridge'
-    uci set network.@device[-1].ports='eth0 tap0'
+    
+    # Solo usar eth1 para WAN en el bridge VPN, NO eth0
+    uci set network.@device[-1].ports='eth1 tap0'
+    
     uci set network.@device[-1].ipv6='0'
     uci set network.@device[-1].igmp_snooping='1'
     uci set network.@device[-1].stp='0'
     uci set network.@device[-1].forward_delay='0'
     uci set network.@device[-1].enabled='1'
     
-    echo -e "${GREEN}- Dispositivo bridge br-vpn creado con puertos: eth0 tap0${NC}"
+    echo -e "${GREEN}- Dispositivo bridge br-vpn creado con puertos: eth1 tap0${NC}"
+    echo -e "${YELLOW}- NOTA: eth0 se mantiene para la LAN${NC}"
+}
+
+# Configurar interfaces de red manteniendo accesibilidad
+configure_network_interfaces() {
+    echo -e "${YELLOW}- Configurando interfaces de red...${NC}"
     
-    # Configurar interfaz que usa el bridge
+    # Configurar interfaz LAN (br-lan) - MANTENER ACCESIBILIDAD
+    uci set network.lan.proto='static'
+    uci set network.lan.ipaddr='192.168.1.2'
+    uci set network.lan.netmask='255.255.255.0'
+    uci set network.lan.device='br-lan'
+    
+    # Configurar interfaz WAN para usar el bridge VPN
+    uci delete network.wan 2>/dev/null
+    uci delete network.wan6 2>/dev/null
+    
+    uci set network.wan=interface
+    uci set network.wan.proto='dhcp'
+    uci set network.wan.device='br-vpn'
+    
+    # Configurar interfaz VPN
     uci delete network.vpn 2>/dev/null
     uci set network.vpn=interface
     uci set network.vpn.proto='none'
     uci set network.vpn.device='br-vpn'
     
-    echo -e "${GREEN}- Interfaz VPN configurada en br-vpn${NC}"
+    echo -e "${GREEN}- Interfaces de red configuradas${NC}"
+    echo -e "${GREEN}- LAN: 192.168.1.2 en br-lan${NC}"
+    echo -e "${GREEN}- WAN: br-vpn (eth1 + tap0)${NC}"
 }
 
 # Verificar y configurar TAP manualmente
@@ -209,7 +263,7 @@ apply_configuration() {
     # Recargar configuración de red
     echo -e "${YELLOW}- Recargando configuración de red...${NC}"
     /etc/init.d/network reload
-    sleep 3
+    sleep 5
     
     echo -e "${GREEN}- Configuración aplicada${NC}"
 }
@@ -241,42 +295,35 @@ verify_bridge_config() {
         echo -e "${GREEN}- Bridge br-vpn creado correctamente${NC}"
         echo -e "${YELLOW}- Estado del bridge:${NC}"
         ip link show br-vpn
-        
-        # Verificar puertos del bridge
-        if command -v brctl >/dev/null 2>&1; then
-            echo -e "${YELLOW}- Puertos del bridge:${NC}"
-            brctl show br-vpn
-        else
-            echo -e "${YELLOW}- Información de puertos:${NC}"
-            bridge link show dev eth0 2>/dev/null || echo "eth0 en bridge"
-            bridge link show dev tap0 2>/dev/null || echo "tap0 en bridge"
-        fi
     else
         echo -e "${RED}- ERROR: Bridge br-vpn no se creó${NC}"
-        echo -e "${YELLOW}- Intentando crear manualmente...${NC}"
-        brctl addbr br-vpn
-        brctl addif br-vpn eth0
-        brctl addif br-vpn tap0
-        ip link set br-vpn up
     fi
+    
+    # Verificar IP de la LAN
+    echo -e "${YELLOW}- Configuración IP LAN:${NC}"
+    uci show network.lan
+    
+    echo -e "${YELLOW}- Interfaces de red:${NC}"
+    ip addr show | grep -E "(eth|br-|tap)" | grep inet
 }
 
-# Mostrar resumen final
+# Mostrar resumen final y advertencias
 show_summary() {
     echo -e "\n${GREEN}=== CONFIGURACIÓN COMPLETADA PARA CUDY TR3000 ===${NC}"
-    echo -e "Dispositivo bridge: br-vpn"
-    echo -e "Puertos configurados: eth0 tap0"
-    echo -e "Interfaz VPN: br-vpn"
-    echo -e "OpenVPN: activado y ejecutándose"
-    echo -e "WiFi: desactivado"
+    echo -e "${GREEN}- Dispositivo bridge: br-vpn${NC}"
+    echo -e "${GREEN}- Puertos del bridge: eth1 tap0${NC}"
+    echo -e "${GREEN}- Interfaz VPN: br-vpn${NC}"
+    echo -e "${GREEN}- OpenVPN: activado y ejecutándose${NC}"
+    echo -e "${GREEN}- WiFi: desactivado${NC}"
+    echo -e "${GREEN}- IP de administración: 192.168.1.2${NC}"
+    
+    echo -e "\n${YELLOW}=== IMPORTANTE ===${NC}"
+    echo -e "${YELLOW}- El dispositivo sigue accesible en: ${GREEN}http://192.168.1.2${NC}"
+    echo -e "${YELLOW}- eth0 se mantiene en br-lan para la LAN${NC}"
+    echo -e "${YELLOW}- eth1 se usa para WAN en el bridge VPN${NC}"
     
     # Verificación final
     verify_bridge_config
-    
-    echo -e "\n${YELLOW}- Para ver en la interfaz web:${NC}"
-    echo -e "  1. Ve a Network → Devices"
-    echo -e "  2. Busca 'br-vpn' en la lista de dispositivos"
-    echo -e "  3. Deberías ver eth0 y tap0 como puertos del bridge"
 }
 
 # Función principal
@@ -285,6 +332,9 @@ main() {
     
     # Verificar que es un TR3000
     verify_tr3000
+    
+    # Obtener configuración actual
+    get_current_network_config
     
     # Verificar compatibilidad
     check_compatibility
@@ -317,6 +367,9 @@ main() {
     # Crear dispositivo bridge
     create_bridge_device
     
+    # Configurar interfaces de red
+    configure_network_interfaces
+    
     # Configurar interfaz TAP
     setup_tap_interface
     
@@ -332,9 +385,9 @@ main() {
     # Mostrar resumen
     show_summary
     
-    # Preguntar por reinicio
     echo -e "\n${YELLOW}¿Reiniciar dispositivo? (s/n)${NC}"
     echo -e "${YELLOW}(Recomendado para aplicar cambios completamente)${NC}"
+    echo -e "${RED}ADVERTENCIA: Si pierde acceso, conecte por cable y use la IP 192.168.1.2${NC}"
     read -r response
     case "$response" in
         [sS]*) 
