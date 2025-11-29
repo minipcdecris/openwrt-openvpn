@@ -163,17 +163,20 @@ configure_network_interfaces() {
     uci set network.lan.ipaddr='192.168.1.2'
     uci set network.lan.netmask='255.255.255.0'
     uci set network.lan.device='br-lan'
+    uci set network.lan.force_link='1'
     
     # ELIMINAR INTERFACES WAN
     echo -e "${YELLOW}- Eliminando interfaces WAN...${NC}"
     uci delete network.wan 2>/dev/null
     uci delete network.wan6 2>/dev/null
     
-    # Configurar interfaz VPN
+    # Configurar interfaz VPN - CORREGIDO
+    echo -e "${YELLOW}- Configurando interfaz VPN...${NC}"
     uci delete network.vpn 2>/dev/null
     uci set network.vpn=interface
     uci set network.vpn.proto='none'
     uci set network.vpn.device='br-vpn'
+    uci set network.vpn.auto='1'
     
     echo -e "${GREEN}- Interfaces de red configuradas${NC}"
     echo -e "${GREEN}- LAN: 192.168.1.2 en br-lan (eth1)${NC}"
@@ -362,37 +365,47 @@ remove_wan_completely() {
     echo -e "${GREEN}- Limpieza completa de WAN realizada${NC}"
 }
 
-# Verificar configuración del bridge
-verify_bridge_config() {
-    echo -e "${YELLOW}- Verificando configuración del bridge...${NC}"
+# Verificar configuración de interfaces
+verify_network_config() {
+    echo -e "${YELLOW}- Verificando configuración de interfaces...${NC}"
     
-    # Mostrar configuración UCI
-    echo -e "${YELLOW}- Configuración UCI del dispositivo bridge:${NC}"
-    uci show network.@device[0]
+    # Mostrar todas las interfaces
+    echo -e "${YELLOW}- Interfaces configuradas:${NC}"
+    uci show network | grep "network.*=interface" | cut -d'.' -f2 | cut -d'=' -f1
     
-    # Verificar si el bridge existe en el sistema
-    if ip link show br-vpn >/dev/null 2>&1; then
-        echo -e "${GREEN}- Bridge br-vpn creado correctamente${NC}"
-        echo -e "${YELLOW}- Estado del bridge:${NC}"
-        ip link show br-vpn
-    else
-        echo -e "${RED}- ERROR: Bridge br-vpn no se creó${NC}"
-    fi
-    
-    # Verificar IP de la LAN
-    echo -e "${YELLOW}- Configuración IP LAN:${NC}"
+    # Verificar interfaz LAN
+    echo -e "${YELLOW}- Configuración LAN:${NC}"
     uci show network.lan
     
-    echo -e "${YELLOW}- Interfaces de red activas:${NC}"
-    ip addr show | grep -E "(eth|br-|tap)" | grep inet
-    
-    # Verificar que WAN no existe
-    echo -e "${YELLOW}- Verificando ausencia de WAN:${NC}"
-    if uci get network.wan >/dev/null 2>&1; then
-        echo -e "${RED}- WARNING: Interfaz WAN todavía existe${NC}"
+    # Verificar interfaz VPN
+    echo -e "${YELLOW}- Configuración VPN:${NC}"
+    if uci get network.vpn >/dev/null 2>&1; then
+        uci show network.vpn
     else
-        echo -e "${GREEN}- WAN completamente eliminada${NC}"
+        echo -e "${RED}- ERROR: Interfaz VPN no existe${NC}"
+        # Crear la interfaz VPN si no existe
+        echo -e "${YELLOW}- Creando interfaz VPN...${NC}"
+        uci set network.vpn=interface
+        uci set network.vpn.proto='none'
+        uci set network.vpn.device='br-vpn'
+        uci set network.vpn.auto='1'
+        uci commit network
+        /etc/init.d/network reload
+        echo -e "${GREEN}- Interfaz VPN creada${NC}"
     fi
+    
+    # Verificar bridge br-vpn
+    echo -e "${YELLOW}- Verificando bridge br-vpn:${NC}"
+    if ip link show br-vpn >/dev/null 2>&1; then
+        echo -e "${GREEN}- Bridge br-vpn activo${NC}"
+        brctl show br-vpn
+    else
+        echo -e "${RED}- ERROR: Bridge br-vpn no existe${NC}"
+    fi
+    
+    # Verificar interfaces de red
+    echo -e "${YELLOW}- Interfaces de red activas:${NC}"
+    ip addr show | grep -E "(eth|br-|tap)" | grep inet || echo "No hay direcciones IP asignadas"
 }
 
 # Mostrar resumen final y advertencias
@@ -419,7 +432,7 @@ show_summary() {
     echo -e "${YELLOW}- No hay interfaz WAN configurada${NC}"
     
     # Verificación final
-    verify_bridge_config
+    verify_network_config
 }
 
 # Función principal
@@ -484,7 +497,7 @@ main() {
     # Limpiar instancias de OpenVPN no deseadas
     cleanup_openvpn_instances
     
-    # ← NUEVA FUNCIÓN: Eliminación completa de WAN al final
+    # Eliminación completa de WAN al final
     remove_wan_completely
     
     # Mostrar resumen
