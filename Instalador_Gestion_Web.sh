@@ -1,38 +1,35 @@
 #!/bin/sh
 
 echo ""
-echo "🌐 CONFIGURANDO ACCESO WEB OPENVPN EN LUCi"
-echo "=========================================="
+echo "🔧 CONFIGURANDO OPENVPN PARA LUCi"
+echo "================================"
 
-# 1. Instalar paquetes necesarios
+# 1. Verificar estado actual
 echo ""
-echo "📦 PASO 1: INSTALANDO PAQUETES LUCi..."
-echo "------------------------------------"
+echo "🔍 ESTADO ACTUAL:"
+echo "----------------"
 
-if ! opkg list-installed | grep -q "luci-app-openvpn"; then
-    echo "   [....] Instalando luci-app-openvpn..."
-    opkg update > /dev/null 2>&1
-    opkg install luci-app-openvpn > /dev/null 2>&1
-    echo "   [DONE] luci-app-openvpn instalado"
+if uci show openvpn | grep -q "VPN_Server"; then
+    echo "✅ Configuración VPN_Server detectada"
+    uci show openvpn.VPN_Server
 else
-    echo "   ✅ luci-app-openvpn ya instalado"
+    echo "❌ No hay configuración VPN_Server"
 fi
 
-# 2. Configurar la interfaz para que aparezca en LuCI
+# 2. Crear configuración compatible con LuCI
 echo ""
-echo "⚙️  PASO 2: CONFIGURANDO INTERFAZ EN LUCi..."
-echo "------------------------------------------"
+echo "⚙️  CREANDO CONFIGURACIÓN LUCi:"
+echo "------------------------------"
 
-# Asegurarse de que la configuración de OpenVPN sea compatible con LuCI
-if [ -f "/etc/config/openvpn" ]; then
-    echo "   [....] Verificando configuración OpenVPN..."
-    
-    # LuCI necesita una configuración específica, asegurarnos de que existe
-    if ! uci get openvpn.VPN_Server >/dev/null 2>&1; then
-        echo "   ❌ No se encontró configuración VPN_Server"
-        echo "   🔹 Creando configuración básica para LuCI..."
-        
-        cat > /etc/config/openvpn << 'OVPN_LUCI'
+# Detectar valores actuales o usar valores por defecto
+VPN_PORT=$(uci get openvpn.VPN_Server.port 2>/dev/null || echo "1194")
+DDNS_DOMAIN=$(uci get ddns.@service[0].domain 2>/dev/null || echo "tudominio.duckdns.org")
+
+echo "   Puerto detectado: $VPN_PORT"
+echo "   Dominio detectado: $DDNS_DOMAIN"
+
+# Crear configuración OpenVPN para LuCI
+cat > /etc/config/openvpn << 'OVPN_CONFIG'
 config openvpn 'VPN_Server'
     option enabled '1'
     option mode 'server'
@@ -58,112 +55,150 @@ config openvpn 'VPN_Server'
     option status_version '3'
     option log '/var/log/openvpn.log'
     option crl_verify '/etc/openvpn/crl.pem'
-OVPN_LUCI
-        echo "   [DONE] Configuración creada"
+
+config openvpn 'client_template'
+    option enabled '0'
+    option dev 'tap'
+    option proto 'udp'
+    option resolv_retry 'infinite'
+    option nobind '1'
+    option remote "$DDNS_DOMAIN $VPN_PORT"
+    option float '1'
+    option cipher 'AES-256-GCM'
+    option keepalive '15 60'
+    option remote_cert_tls 'server'
+OVPN_CONFIG
+
+echo "✅ Configuración creada"
+
+# 3. Asegurar que los archivos de certificados existan
+echo ""
+echo "🔐 VERIFICANDO CERTIFICADOS:"
+echo "---------------------------"
+
+CERT_FILES=(
+    "/etc/openvpn/ca.crt"
+    "/etc/openvpn/server.crt" 
+    "/etc/openvpn/server.key"
+    "/etc/openvpn/dh.pem"
+    "/etc/openvpn/crl.pem"
+)
+
+for cert_file in "${CERT_FILES[@]}"; do
+    if [ -f "$cert_file" ]; then
+        echo "✅ $cert_file: EXISTE"
+        # Ajustar permisos
+        chmod 600 "$cert_file" 2>/dev/null
     else
-        echo "   ✅ Configuración existente detectada"
+        echo "❌ $cert_file: FALTANTE"
     fi
+done
+
+# 4. Crear interfaz TAP si no existe
+echo ""
+echo "🔌 CONFIGURANDO INTERFAZ TAP:"
+echo "----------------------------"
+
+if ! grep -q "tap0" /etc/config/network 2>/dev/null; then
+    echo "   [....] Agregando interfaz tap0 a network..."
+    uci set network.tap0=interface
+    uci set network.tap0.proto='none'
+    uci set network.tap0.device='tap0'
+    uci commit network
+    echo "   ✅ Interfaz tap0 agregada"
+else
+    echo "   ✅ Interfaz tap0 ya existe"
 fi
 
-# 3. Crear archivos de ejemplo para clientes en LuCI
+# Crear dispositivo TAP
+if ! grep -q "tap0" /etc/config/network 2>/dev/null | grep -q "device"; then
+    cat >> /etc/config/network << 'NETWORK_CONFIG'
+
+config device
+    option name 'tap0'
+    option type 'tap'
+NETWORK_CONFIG
+fi
+
+# 5. Configurar firewall para OpenVPN
 echo ""
-echo "📁 PASO 3: PREPARANDO ARCHIVOS PARA LUCi..."
-echo "-----------------------------------------"
+echo "🔥 CONFIGURANDO FIREWALL:"
+echo "------------------------"
 
-# Crear directorio para archivos de clientes si no existe
-mkdir -p /etc/openvpn/luci-clients
+# Verificar si ya existe la regla
+if ! uci show firewall | grep -q "Allow-OpenVPN"; then
+    echo "   [....] Agregando regla de firewall..."
+    uci add firewall rule
+    uci set firewall.@rule[-1].name='Allow-OpenVPN'
+    uci set firewall.@rule[-1].src='wan'
+    uci set firewall.@rule[-1].proto='udp'
+    uci set firewall.@rule[-1].dest_port="$VPN_PORT"
+    uci set firewall.@rule[-1].target='ACCEPT'
+    uci commit firewall
+    echo "   ✅ Regla de firewall agregada"
+else
+    echo "   ✅ Regla de firewall ya existe"
+fi
 
-# Crear archivo de ejemplo para mostrar en LuCI
-cat > /etc/openvpn/luci-clients/README.txt << 'README'
-Archivos de clientes OpenVPN disponibles:
-
-- Los archivos .ovpn están en: /etc/openvpn/clients/
-- Para descargar: Usa SCP o WinSCP
-- IP del router: [Tu IP local]
-
-Comandos útiles:
-- gestor-openvpn : Gestión de clientes por terminal
-- /etc/init.d/openvpn restart : Reiniciar servicio
-
-Los clientes deben usar el archivo .ovpn correspondiente.
-README
-
-echo "   [DONE] Archivos preparados"
-
-# 4. Configurar permisos y reiniciar servicios
+# 6. Reiniciar servicios
 echo ""
-echo "🔧 PASO 4: CONFIGURANDO PERMISOS..."
-echo "---------------------------------"
+echo "🔄 REINICIANDO SERVICIOS:"
+echo "------------------------"
 
-# Asegurar permisos correctos para los archivos
-chmod 644 /etc/openvpn/*.crt 2>/dev/null
-chmod 600 /etc/openvpn/*.key 2>/dev/null
-chmod 644 /etc/openvpn/*.pem 2>/dev/null
+echo "   [....] Reiniciando firewall..."
+/etc/init.d/firewall reload >/dev/null 2>&1
 
-echo "   [DONE] Permisos configurados"
-
-# 5. Reiniciar servicios
-echo ""
-echo "🔄 PASO 5: REINICIANDO SERVICIOS..."
-echo "---------------------------------"
-
-echo "   [....] Reiniciando LuCI..."
-/etc/init.d/uhttpd restart >/dev/null 2>&1
-echo "   [DONE] LuCI reiniciado"
+echo "   [....] Reiniciando red..."
+/etc/init.d/network reload >/dev/null 2>&1
 
 echo "   [....] Reiniciando OpenVPN..."
-/etc/init.d/openvpn restart >/dev/null 2>&1
-sleep 3
-echo "   [DONE] OpenVPN reiniciado"
+/etc/init.d/openvpn enable
+/etc/init.d/openvpn restart
 
-# 6. Verificación final
+echo "   [....] Reiniciando LuCI..."
+/etc/init.d/uhttpd restart
+
+sleep 3
+
+# 7. Verificación final
 echo ""
 echo "✅ VERIFICACIÓN FINAL:"
 echo "---------------------"
 
-# Verificar que LuCI puede ver OpenVPN
-if [ -d "/usr/lib/lua/luci/model/cbi/openvpn" ]; then
-    echo "   ✅ Módulo LuCI OpenVPN: INSTALADO"
-else
-    echo "   ❌ Módulo LuCI OpenVPN: FALTANTE"
-fi
-
-# Verificar servicio OpenVPN
+echo ""
+echo "📊 ESTADO OPENVPN:"
 if pgrep openvpn >/dev/null; then
     echo "   ✅ Servicio OpenVPN: ACTIVO"
+    echo "   📍 PID: $(pgrep openvpn)"
 else
     echo "   ❌ Servicio OpenVPN: INACTIVO"
 fi
 
-# Verificar interfaz web
-if netstat -tulpn | grep -q ":80"; then
-    echo "   ✅ Servicio web (LuCI): ACTIVO"
+echo ""
+echo "🌐 INTERFAZ TAP0:"
+if ip link show tap0 >/dev/null 2>&1; then
+    echo "   ✅ Interfaz tap0: ACTIVA"
 else
-    echo "   ❌ Servicio web (LuCI): INACTIVO"
+    echo "   ❌ Interfaz tap0: INACTIVA"
 fi
 
-# Mostrar información de acceso
-ROUTER_IP=$(uci get network.lan.ipaddr 2>/dev/null || ip addr show br-lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 || echo "192.168.1.1")
+echo ""
+echo "📁 CONFIGURACIÓN:"
+if uci get openvpn.VPN_Server.enabled >/dev/null 2>&1; then
+    echo "   ✅ Configuración VPN_Server: PRESENTE"
+    echo "   🔧 Estado: $(uci get openvpn.VPN_Server.enabled)"
+else
+    echo "   ❌ Configuración VPN_Server: FALTANTE"
+fi
 
 echo ""
-echo "🌐 INFORMACIÓN DE ACCESO:"
-echo "------------------------"
-echo "   📍 URL de acceso: http://$ROUTER_IP"
-echo "   👤 Usuario: root"
-echo "   🔐 Contraseña: [tu contraseña de router]"
+echo "🎯 INSTRUCCIONES DE ACCESO:"
+ROUTER_IP=$(uci get network.lan.ipaddr 2>/dev/null || echo "192.168.1.1")
+echo "   1. Ve a: http://$ROUTER_IP"
+echo "   2. Navega a: VPN → OpenVPN"
+echo "   3. Deberías ver:"
+echo "      - Status (pestaña)"
+echo "      - OpenVPN Instances (pestaña)" 
+echo "      - Configuration (pestaña)"
 echo ""
-echo "📍 RUTA EN LUCi:"
-echo "   Services → OpenVPN"
-echo ""
-echo "📊 QUÉ PUEDES HACER EN LUCi:"
-echo "   ✅ Ver estado del servidor"
-echo "   ✅ Iniciar/Detener servicio"
-echo "   ✅ Ver logs en tiempo real"
-echo "   ✅ Ver clientes conectados"
-echo "   ✅ Configurar opciones avanzadas"
-echo ""
-echo "🔧 GESTIÓN ADICIONAL:"
-echo "   Para gestión avanzada de clientes usa: gestor-openvpn"
-echo ""
-
-echo "🎉 CONFIGURACIÓN COMPLETADA!"
+echo "💡 Si aún no aparece, limpia la cache del navegador"
