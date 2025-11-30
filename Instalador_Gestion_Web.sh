@@ -1,231 +1,184 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 CONFIGURANDO OPENVPN PARA LUCi"
-echo "================================"
+echo "🛠️  REINSTALANDO GESTOR-OPENVPN FUNCIONAL"
+echo "========================================"
 
-# 1. Verificar estado actual
+# 1. Eliminar el gestor actual
 echo ""
-echo "🔍 ESTADO ACTUAL:"
-echo "----------------"
+echo "🗑️  Eliminando gestor actual..."
+rm -f /usr/bin/gestor-openvpn
 
-if uci show openvpn | grep -q "VPN_Server"; then
-    echo "✅ Configuración VPN_Server detectada"
-    uci show openvpn.VPN_Server
-else
-    echo "❌ No hay configuración VPN_Server"
-fi
-
-# 2. Crear configuración compatible con LuCI
+# 2. Crear nuevo gestor funcional
 echo ""
-echo "⚙️  CREANDO CONFIGURACIÓN LUCi:"
-echo "------------------------------"
+echo "📝 Creando nuevo gestor..."
+cat > /usr/bin/gestor-openvpn << 'GESTOR_SCRIPT'
+#!/bin/sh
 
-# Detectar valores actuales o usar valores por defecto
-VPN_PORT=$(uci get openvpn.VPN_Server.port 2>/dev/null || echo "1194")
-DDNS_DOMAIN=$(uci get ddns.@service[0].domain 2>/dev/null || echo "tudominio.duckdns.org")
+# Función para mostrar menú
+mostrar_menu() {
+    echo ""
+    echo "🔧 GESTOR DE CLIENTES OPENVPN - COMPLETO"
+    echo "========================================"
+    echo ""
+    echo "1) Ver clientes conectados"
+    echo "2) Ver todos los clientes (válidos y revocados)"
+    echo "3) Bloquear cliente (revocar certificado)"
+    echo "4) Desbloquear cliente (nuevo certificado)"
+    echo "5) Ver solo clientes revocados"
+    echo "6) Estado del servicio"
+    echo "7) Salir"
+    echo ""
+    echo -n "Selecciona una opción [1-7]: "
+}
 
-echo "   Puerto detectado: $VPN_PORT"
-echo "   Dominio detectado: $DDNS_DOMAIN"
+# Función para ver clientes conectados
+ver_conectados() {
+    echo ""
+    echo "📊 CLIENTES CONECTADOS:"
+    if [ -f "/var/log/openvpn-status.log" ]; then
+        if grep -q "CLIENT_LIST" "/var/log/openvpn-status.log"; then
+            echo "📍 Por archivo de estado:"
+            grep "^CLIENT_LIST" /var/log/openvpn-status.log | while read line; do
+                client=$(echo "$line" | awk '{print $2}')
+                ip=$(echo "$line" | awk '{print $3}')
+                bytes_recv=$(echo "$line" | awk '{print $4}')
+                bytes_sent=$(echo "$line" | awk '{print $5}')
+                echo "   └─ $client (IP: $ip)"
+                echo "      ├─ Descargado: $((${bytes_recv:-0}/1024/1024)) MB"
+                echo "      ├─ Subido: $((${bytes_sent:-0}/1024/1024)) MB"
+            done
+        else
+            echo "   ℹ️  No hay clientes conectados"
+        fi
+    else
+        echo "   ❌ Archivo de estado no encontrado"
+    fi
+}
 
-# Crear configuración OpenVPN para LuCI
-cat > /etc/config/openvpn << OVPN_CONFIG
-config openvpn 'VPN_Server'
-    option enabled '1'
-    option mode 'server'
-    option dev 'tap0'
-    option proto 'udp'
-    option port '$VPN_PORT'
-    option tls_server '1'
-    option ca '/etc/openvpn/ca.crt'
-    option cert '/etc/openvpn/server.crt'
-    option key '/etc/openvpn/server.key'
-    option dh '/etc/openvpn/dh.pem'
-    option server_bridge '10.8.0.1 255.255.255.0 10.8.0.2 10.8.0.254'
-    option keepalive '10 120'
-    option cipher 'AES-256-GCM'
-    option user 'nobody'
-    option group 'nogroup'
-    option persist_key '1'
-    option persist_tun '1'
-    option verb '3'
-    option duplicate_cn '1'
-    option client_to_client '1'
-    option status '/var/log/openvpn-status.log'
-    option status_version '3'
-    option log '/var/log/openvpn.log'
-    option crl_verify '/etc/openvpn/crl.pem'
+# Función para ver todos los clientes
+ver_todos() {
+    echo ""
+    echo "👥 TODOS LOS CLIENTES:"
+    if [ -f "/etc/easy-rsa/pki/index.txt" ]; then
+        echo "✅ VÁLIDOS:"
+        grep "^V" /etc/easy-rsa/pki/index.txt 2>/dev/null | awk '{print "   " $6}' || echo "   No hay clientes válidos"
+        echo ""
+        echo "❌ REVOCADOS:"
+        grep "^R" /etc/easy-rsa/pki/index.txt 2>/dev/null | awk '{print "   " $6}' || echo "   No hay clientes revocados"
+    else
+        echo "   ❌ No se encontró la base de datos de certificados"
+    fi
+}
 
-config openvpn 'client_template'
-    option enabled '0'
-    option dev 'tap'
-    option proto 'udp'
-    option resolv_retry 'infinite'
-    option nobind '1'
-    option remote "$DDNS_DOMAIN $VPN_PORT"
-    option float '1'
-    option cipher 'AES-256-GCM'
-    option keepalive '15 60'
-    option remote_cert_tls 'server'
-OVPN_CONFIG
+# Función para bloquear cliente
+bloquear_cliente() {
+    echo ""
+    echo -n "🔒 Nombre del cliente a bloquear (ej: client1): "
+    read CLIENTE
+    
+    if [ -f "/etc/easy-rsa/pki/issued/${CLIENTE}.crt" ]; then
+        cd /etc/easy-rsa
+        echo "yes" | easyrsa revoke "$CLIENTE" > /dev/null 2>&1
+        easyrsa gen-crl > /dev/null 2>&1
+        cp /etc/easy-rsa/pki/crl.pem /etc/openvpn/
+        /etc/init.d/openvpn restart > /dev/null 2>&1
+        echo "✅ Cliente $CLIENTE bloqueado"
+    else
+        echo "❌ Cliente $CLIENTE no encontrado"
+    fi
+}
 
-echo "✅ Configuración creada"
+# Función para desbloquear cliente
+desbloquear_cliente() {
+    echo ""
+    echo -n "🔓 Nombre del cliente a desbloquear (ej: client1): "
+    read CLIENTE
+    
+    cd /etc/easy-rsa
+    echo -e "yes" | easyrsa build-client-full "$CLIENTE" nopass > /dev/null 2>&1
+    easyrsa gen-crl > /dev/null 2>&1
+    cp /etc/easy-rsa/pki/crl.pem /etc/openvpn/
+    /etc/init.d/openvpn restart > /dev/null 2>&1
+    echo "✅ Cliente $CLIENTE desbloqueado - NUEVO certificado generado"
+}
 
-# 3. Asegurar que los archivos de certificados existan
-echo ""
-echo "🔐 VERIFICANDO CERTIFICADOS:"
-echo "---------------------------"
+# Función para ver revocados
+ver_revocados() {
+    echo ""
+    echo "📋 CLIENTES REVOCADOS:"
+    if [ -f "/etc/easy-rsa/pki/index.txt" ]; then
+        revoked=$(grep "^R" /etc/easy-rsa/pki/index.txt 2>/dev/null | awk '{print $6}')
+        if [ -n "$revoked" ]; then
+            echo "$revoked" | while read client; do
+                echo "   ❌ $client"
+            done
+        else
+            echo "   ✅ No hay clientes revocados"
+        fi
+    else
+        echo "   ❌ No se encontró la base de datos de certificados"
+    fi
+}
 
-echo "   [....] Verificando archivos de certificados..."
+# Función para estado del servicio
+estado_servicio() {
+    echo ""
+    echo "🔍 ESTADO DEL SERVICIO:"
+    if pgrep openvpn > /dev/null; then
+        echo "   ✅ OpenVPN: ACTIVO"
+    else
+        echo "   ❌ OpenVPN: INACTIVO"
+    fi
+    
+    if [ -f "/var/log/openvpn-status.log" ]; then
+        echo "   ✅ Archivo de estado: EXISTE"
+    else
+        echo "   ❌ Archivo de estado: NO EXISTE"
+    fi
+    
+    if ip link show tap0 > /dev/null 2>&1; then
+        echo "   ✅ Interfaz tap0: ACTIVA"
+    else
+        echo "   ❌ Interfaz tap0: INACTIVA"
+    fi
+}
 
-# Verificar cada archivo individualmente
-if [ -f "/etc/openvpn/ca.crt" ]; then
-    echo "✅ /etc/openvpn/ca.crt: EXISTE"
-    chmod 644 /etc/openvpn/ca.crt
-else
-    echo "❌ /etc/openvpn/ca.crt: FALTANTE"
-fi
+# Menú principal
+while true; do
+    mostrar_menu
+    read OPCION
+    
+    case $OPCION in
+        1) ver_conectados ;;
+        2) ver_todos ;;
+        3) bloquear_cliente ;;
+        4) desbloquear_cliente ;;
+        5) ver_revocados ;;
+        6) estado_servicio ;;
+        7)
+            echo ""
+            echo "👋 Saliendo..."
+            exit 0
+            ;;
+        *)
+            echo "❌ Opción inválida. Usa números del 1 al 7."
+            ;;
+    esac
+    
+    echo ""
+    echo "────────────────────────────────────"
+done
+GESTOR_SCRIPT
 
-if [ -f "/etc/openvpn/server.crt" ]; then
-    echo "✅ /etc/openvpn/server.crt: EXISTE"
-    chmod 644 /etc/openvpn/server.crt
-else
-    echo "❌ /etc/openvpn/server.crt: FALTANTE"
-fi
-
-if [ -f "/etc/openvpn/server.key" ]; then
-    echo "✅ /etc/openvpn/server.key: EXISTE"
-    chmod 600 /etc/openvpn/server.key
-else
-    echo "❌ /etc/openvpn/server.key: FALTANTE"
-fi
-
-if [ -f "/etc/openvpn/dh.pem" ]; then
-    echo "✅ /etc/openvpn/dh.pem: EXISTE"
-    chmod 644 /etc/openvpn/dh.pem
-else
-    echo "❌ /etc/openvpn/dh.pem: FALTANTE"
-fi
-
-if [ -f "/etc/openvpn/crl.pem" ]; then
-    echo "✅ /etc/openvpn/crl.pem: EXISTE"
-    chmod 644 /etc/openvpn/crl.pem
-else
-    echo "❌ /etc/openvpn/crl.pem: FALTANTE"
-fi
-
-# 4. Crear interfaz TAP si no existe
-echo ""
-echo "🔌 CONFIGURANDO INTERFAZ TAP:"
-echo "----------------------------"
-
-if ! grep -q "tap0" /etc/config/network 2>/dev/null; then
-    echo "   [....] Agregando interfaz tap0 a network..."
-    uci set network.tap0=interface
-    uci set network.tap0.proto='none'
-    uci set network.tap0.device='tap0'
-    uci commit network
-    echo "   ✅ Interfaz tap0 agregada"
-else
-    echo "   ✅ Interfaz tap0 ya existe"
-fi
-
-# Crear dispositivo TAP
-if ! grep -q "name.*tap0" /etc/config/network 2>/dev/null; then
-    echo "   [....] Agregando dispositivo tap0..."
-    uci add network device
-    uci set network.@device[-1].name='tap0'
-    uci set network.@device[-1].type='tap'
-    uci commit network
-    echo "   ✅ Dispositivo tap0 agregado"
-else
-    echo "   ✅ Dispositivo tap0 ya existe"
-fi
-
-# 5. Configurar firewall para OpenVPN
-echo ""
-echo "🔥 CONFIGURANDO FIREWALL:"
-echo "------------------------"
-
-# Verificar si ya existe la regla
-if ! uci show firewall | grep -q "Allow-OpenVPN"; then
-    echo "   [....] Agregando regla de firewall..."
-    uci add firewall rule
-    uci set firewall.@rule[-1].name='Allow-OpenVPN'
-    uci set firewall.@rule[-1].src='wan'
-    uci set firewall.@rule[-1].proto='udp'
-    uci set firewall.@rule[-1].dest_port="$VPN_PORT"
-    uci set firewall.@rule[-1].target='ACCEPT'
-    uci commit firewall
-    echo "   ✅ Regla de firewall agregada"
-else
-    echo "   ✅ Regla de firewall ya existe"
-fi
-
-# 6. Reiniciar servicios
-echo ""
-echo "🔄 REINICIANDO SERVICIOS:"
-echo "------------------------"
-
-echo "   [....] Reiniciando firewall..."
-/etc/init.d/firewall reload >/dev/null 2>&1
-sleep 2
-
-echo "   [....] Reiniciando red..."
-/etc/init.d/network reload >/dev/null 2>&1
-sleep 2
-
-echo "   [....] Reiniciando OpenVPN..."
-/etc/init.d/openvpn enable >/dev/null 2>&1
-/etc/init.d/openvpn restart >/dev/null 2>&1
-sleep 3
-
-echo "   [....] Reiniciando LuCI..."
-/etc/init.d/uhttpd restart >/dev/null 2>&1
-sleep 2
-
-# 7. Verificación final
-echo ""
-echo "✅ VERIFICACIÓN FINAL:"
-echo "---------------------"
+# 3. Dar permisos de ejecución
+chmod +x /usr/bin/gestor-openvpn
 
 echo ""
-echo "📊 ESTADO OPENVPN:"
-if pgrep openvpn >/dev/null; then
-    echo "   ✅ Servicio OpenVPN: ACTIVO"
-    echo "   📍 PID: $(pgrep openvpn)"
-else
-    echo "   ❌ Servicio OpenVPN: INACTIVO"
-fi
+echo "✅ Gestor reinstalado correctamente"
+echo ""
+echo "🚀 Probando el gestor..."
+echo "────────────────────────────────────"
 
-echo ""
-echo "🌐 INTERFAZ TAP0:"
-if ip link show tap0 >/dev/null 2>&1; then
-    echo "   ✅ Interfaz tap0: ACTIVA"
-else
-    echo "   ❌ Interfaz tap0: INACTIVA"
-fi
-
-echo ""
-echo "📁 CONFIGURACIÓN:"
-if uci get openvpn.VPN_Server.enabled >/dev/null 2>&1; then
-    echo "   ✅ Configuración VPN_Server: PRESENTE"
-    echo "   🔧 Estado: $(uci get openvpn.VPN_Server.enabled)"
-else
-    echo "   ❌ Configuración VPN_Server: FALTANTE"
-fi
-
-echo ""
-echo "🎯 INSTRUCCIONES DE ACCESO:"
-ROUTER_IP=$(uci get network.lan.ipaddr 2>/dev/null || echo "192.168.1.1")
-echo "   1. Ve a: http://$ROUTER_IP"
-echo "   2. Navega a: VPN → OpenVPN"
-echo "   3. Deberías ver:"
-echo "      - Status (pestaña)"
-echo "      - OpenVPN Instances (pestaña)" 
-echo "      - Configuration (pestaña)"
-echo ""
-echo "💡 Si aún no aparece, limpia la cache del navegador o usa modo incógnito"
-
-echo ""
-echo "✨ CONFIGURACIÓN COMPLETADA"
+# Probar que funcione
+/usr/bin/gestor-openvpn
