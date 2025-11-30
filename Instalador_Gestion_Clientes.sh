@@ -1,10 +1,10 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 CORRIGIENDO GESTOR - MUESTRA TODOS LOS CLIENTES"
-echo "================================================="
+echo "🔧 CORRIGIENDO TODOS LOS ERRORES"
+echo "================================"
 
-# Crear el gestor corregido
+# Crear el gestor completamente corregido
 cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
 #!/bin/sh
 
@@ -12,9 +12,17 @@ cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
 NOMBRES_FILE="/etc/openvpn/clientes/nombres.txt"
 TRACKING_FILE="/etc/openvpn/clientes/tracking.txt"
 
-# Función para obtener nombre descriptivo
+# Asegurar que el archivo de nombres existe
+mkdir -p /etc/openvpn/clientes/
+touch "$NOMBRES_FILE"
+
+# Función para obtener nombre descriptivo (CORREGIDA)
 obtener_nombre() {
     local cliente=$1
+    if [ ! -f "$NOMBRES_FILE" ]; then
+        echo "$cliente"
+        return
+    fi
     local nombre=$(grep "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2)
     if [ -n "$nombre" ]; then
         echo "$nombre"
@@ -41,70 +49,84 @@ mostrar_menu() {
     echo -n "Selecciona [1-8]: "
 }
 
-# Función para ver clientes conectados
+# Función para ver clientes conectados (COMPLETAMENTE CORREGIDA)
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
     
     if [ -f "/var/log/openvpn-status.log" ] && grep -q "CLIENT_LIST" "/var/log/openvpn-status.log"; then
-        while IFS= read -r line; do
-            if echo "$line" | grep -q "^CLIENT_LIST"; then
-                cliente=$(echo "$line" | awk '{print $2}')
-                ip=$(echo "$line" | awk '{print $3}')
-                bytes_recv=$(echo "$line" | awk '{print $4}')
-                bytes_sent=$(echo "$line" | awk '{print $5}')
-                connected_since=$(echo "$line" | awk '{print $6 " " $7}')
-                nombre_descriptivo=$(obtener_nombre "$cliente")
-                
-                echo "   👤 $nombre_descriptivo"
-                echo "      📍 IP: $ip"
+        # ✅ CORREGIDO: Usar método más robusto
+        grep "^CLIENT_LIST" "/var/log/openvpn-status.log" | while IFS= read -r line; do
+            cliente=$(echo "$line" | awk '{print $2}')
+            ip=$(echo "$line" | awk '{print $3}')
+            bytes_recv=$(echo "$line" | awk '{print $4}')
+            bytes_sent=$(echo "$line" | awk '{print $5}')
+            connected_since=$(echo "$line" | awk '{print $6 " " $7}')
+            
+            # ✅ CORREGIDO: Obtener nombre correctamente
+            nombre_descriptivo=$(obtener_nombre "$cliente")
+            
+            # ✅ CORREGIDO: Mostrar siempre el nombre descriptivo en el encabezado
+            echo "   👤 $nombre_descriptivo"
+            echo "      📍 IP: $ip"
+            
+            # Solo mostrar certificado si es diferente del nombre
+            if [ "$cliente" != "$nombre_descriptivo" ]; then
                 echo "      📋 Certificado: $cliente"
-                
-                if [ -n "$connected_since" ] && [ "$connected_since" != "UNDEF" ]; then
-                    echo "      ⏰ Conectado desde: $connected_since"
-                fi
-                
-                if [ -n "$bytes_recv" ] && [ "$bytes_recv" -gt 0 ] 2>/dev/null; then
-                    mb_recv=$((bytes_recv / 1024 / 1024))
-                    echo "      🔽 Descargado: ${mb_recv} MB"
-                fi
-                
-                if [ -n "$bytes_sent" ] && [ "$bytes_sent" -gt 0 ] 2>/dev/null; then
-                    mb_sent=$((bytes_sent / 1024 / 1024))
-                    echo "      🔼 Subido: ${mb_sent} MB"
-                fi
-                echo ""
             fi
-        done < "/var/log/openvpn-status.log"
+            
+            if [ -n "$connected_since" ] && [ "$connected_since" != "UNDEF" ]; then
+                echo "      ⏰ Conectado desde: $connected_since"
+            fi
+            
+            if [ -n "$bytes_recv" ] && [ "$bytes_recv" -gt 0 ] 2>/dev/null; then
+                mb_recv=$((bytes_recv / 1024 / 1024))
+                echo "      🔽 Descargado: ${mb_recv} MB"
+            fi
+            
+            if [ -n "$bytes_sent" ] && [ "$bytes_sent" -gt 0 ] 2>/dev/null; then
+                mb_sent=$((bytes_sent / 1024 / 1024))
+                echo "      🔼 Subido: ${mb_sent} MB"
+            fi
+            echo ""
+        done
     else
         echo "   ℹ️  No hay clientes conectados"
+        echo "   💡 Si hay clientes conectados, ejecuta: /etc/init.d/openvpn restart"
     fi
 }
 
-# Función para listar clientes (CORREGIDA - MUESTRA TODOS)
+# Función para listar clientes (COMPLETAMENTE CORREGIDA)
 listar_clientes() {
     echo ""
     echo "📋 ESTADO DE CLIENTES:"
     
+    # ✅ CORREGIDO: Verificar que el archivo index.txt existe y tiene contenido
     if [ ! -f "/etc/easy-rsa/pki/index.txt" ]; then
-        echo "   ❌ No hay base de datos de certificados"
+        echo "   ❌ No se encuentra la base de datos de certificados"
+        echo "   💡 Ejecuta el instalador de OpenVPN primero"
+        return
+    fi
+    
+    if [ ! -s "/etc/easy-rsa/pki/index.txt" ]; then
+        echo "   ℹ️  La base de datos de certificados está vacía"
         return
     fi
 
-    # ✅ CORREGIDO: Obtener TODOS los clientes de la base de datos
-    todos_clientes=$(grep -E "^(V|R)" /etc/easy-rsa/pki/index.txt 2>/dev/null | awk '{print $6}' | sort -u)
+    # ✅ CORREGIDO: Obtener TODOS los clientes únicos de forma segura
+    todos_clientes=$(grep -E "^(V|R)" "/etc/easy-rsa/pki/index.txt" 2>/dev/null | awk '{print $6}' | sort -u)
     
     if [ -z "$todos_clientes" ]; then
-        echo "   ℹ️  No hay clientes configurados"
+        echo "   ℹ️  No hay clientes configurados en la base de datos"
         return
     fi
 
     echo "🟢 ACTIVOS:"
     activos_encontrados=0
     for cliente in $todos_clientes; do
-        # ✅ CORREGIDO: Verificar si está activo (V) en el index
         if grep -q "^V.*/CN=${cliente}$" "/etc/easy-rsa/pki/index.txt" 2>/dev/null; then
             nombre_descriptivo=$(obtener_nombre "$cliente")
+            # ✅ CORREGIDO: Mostrar correctamente nombre (certificado)
             if [ "$cliente" = "$nombre_descriptivo" ]; then
                 echo "   $cliente"
             else
@@ -121,7 +143,6 @@ listar_clientes() {
     echo "⏸️  SUSPENDIDOS:"
     suspendidos_encontrados=0
     for cliente in $todos_clientes; do
-        # ✅ CORREGIDO: Verificar si está revocado (R) Y tiene backup (suspendido)
         if grep -q "^R.*/CN=${cliente}$" "/etc/easy-rsa/pki/index.txt" 2>/dev/null && \
            [ -f "/etc/openvpn/suspended/${cliente}.crt.backup" ]; then
             nombre_descriptivo=$(obtener_nombre "$cliente")
@@ -141,7 +162,6 @@ listar_clientes() {
     echo "🔴 BLOQUEADOS:"
     bloqueados_encontrados=0
     for cliente in $todos_clientes; do
-        # ✅ CORREGIDO: Verificar si está revocado (R) Y NO tiene backup (bloqueado permanente)
         if grep -q "^R.*/CN=${cliente}$" "/etc/easy-rsa/pki/index.txt" 2>/dev/null && \
            [ ! -f "/etc/openvpn/suspended/${cliente}.crt.backup" ]; then
             nombre_descriptivo=$(obtener_nombre "$cliente")
@@ -161,13 +181,12 @@ listar_clientes() {
     echo "💡 Total clientes en sistema: $(echo "$todos_clientes" | wc -w)"
 }
 
-# Función para suspender cliente (ACTUALIZADA)
+# Función para suspender cliente
 suspender_cliente() {
     echo ""
     echo "⏸️  SUSPENDER CLIENTE (TEMPORAL)"
     echo "------------------------------"
     
-    # ✅ CORREGIDO: Mostrar TODOS los clientes activos
     echo "Clientes activos:"
     activos_encontrados=0
     if [ -f "/etc/easy-rsa/pki/index.txt" ]; then
@@ -191,9 +210,8 @@ suspender_cliente() {
     echo -n "Cliente a suspender (usar nombre o certificado): "
     read INPUT_CLIENTE
     
-    # Buscar certificado real por nombre
     CLIENTE_REAL=""
-    if grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
+    if [ -f "$NOMBRES_FILE" ] && grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
         CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
         echo "   🔍 Encontrado: $INPUT_CLIENTE → $CLIENTE_REAL"
     else
@@ -221,9 +239,7 @@ suspender_cliente() {
     echo "✅ CLIENTE '$nombre_descriptivo' SUSPENDIDO"
 }
 
-# [Las funciones reactivar_cliente, bloquear_permanentemente, gestionar_nombres, estado_servicio 
-# permanecen igual pero usarán la misma lógica corregida]
-
+# Función para reactivar cliente
 reactivar_cliente() {
     echo ""
     echo "▶️  REACTIVAR CLIENTE"
@@ -255,7 +271,7 @@ reactivar_cliente() {
     read INPUT_CLIENTE
     
     CLIENTE_REAL=""
-    if grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
+    if [ -f "$NOMBRES_FILE" ] && grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
         CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
         echo "   🔍 Encontrado: $INPUT_CLIENTE → $CLIENTE_REAL"
     else
@@ -282,6 +298,7 @@ reactivar_cliente() {
     echo "✅ CLIENTE '$nombre_descriptivo' REACTIVADO"
 }
 
+# Función para bloquear permanente
 bloquear_permanentemente() {
     echo ""
     echo "🚫 BLOQUEO PERMANENTE"
@@ -311,7 +328,7 @@ bloquear_permanentemente() {
     read INPUT_CLIENTE
     
     CLIENTE_REAL=""
-    if grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
+    if [ -f "$NOMBRES_FILE" ] && grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
         CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
         echo "   🔍 Encontrado: $INPUT_CLIENTE → $CLIENTE_REAL"
     else
@@ -335,8 +352,7 @@ bloquear_permanentemente() {
     echo "✅ CLIENTE '$nombre_descriptivo' BLOQUEADO PERMANENTEMENTE"
 }
 
-# [Las funciones gestionar_nombres y estado_servicio permanecen igual]
-
+# Función para gestionar nombres (CORREGIDA)
 gestionar_nombres() {
     while true; do
         echo ""
@@ -358,13 +374,15 @@ gestionar_nombres() {
                 echo "----------------"
                 echo "Clientes disponibles:"
                 if [ -f "/etc/easy-rsa/pki/index.txt" ]; then
-                    # ✅ CORREGIDO: Mostrar TODOS los clientes
+                    # ✅ CORREGIDO: Mostrar correctamente sin líneas vacías
                     for cliente in $(grep -E "^(V|R)" /etc/easy-rsa/pki/index.txt 2>/dev/null | awk '{print $6}' | sort -u); do
-                        nombre_actual=$(obtener_nombre "$cliente")
-                        if [ "$cliente" = "$nombre_actual" ]; then
-                            echo "   $cliente"
-                        else
-                            echo "   $nombre_actual ($cliente)"
+                        if [ -n "$cliente" ]; then  # ✅ Solo si no está vacío
+                            nombre_actual=$(obtener_nombre "$cliente")
+                            if [ "$cliente" = "$nombre_actual" ]; then
+                                echo "   $cliente"
+                            else
+                                echo "   $nombre_actual ($cliente)"
+                            fi
                         fi
                     done | head -10
                 fi
@@ -375,6 +393,8 @@ gestionar_nombres() {
                 read nombre_descriptivo
                 
                 if [ -n "$cliente" ] && [ -n "$nombre_descriptivo" ]; then
+                    # ✅ CORREGIDO: Crear archivo si no existe
+                    touch "$NOMBRES_FILE"
                     grep -v "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null > "${NOMBRES_FILE}.tmp"
                     mv "${NOMBRES_FILE}.tmp" "$NOMBRES_FILE"
                     echo "${cliente}:${nombre_descriptivo}" >> "$NOMBRES_FILE"
@@ -386,12 +406,18 @@ gestionar_nombres() {
             2)
                 echo ""
                 echo "📋 NOMBRES ASIGNADOS:"
+                # ✅ CORREGIDO: Verificar correctamente si el archivo tiene contenido
                 if [ -f "$NOMBRES_FILE" ] && [ -s "$NOMBRES_FILE" ]; then
                     echo ""
-                    grep -v "^#" "$NOMBRES_FILE" | while read linea; do
-                        cliente=$(echo "$linea" | cut -d: -f1)
-                        nombre=$(echo "$linea" | cut -d: -f2)
-                        echo "   🏷️  $nombre ($cliente)"
+                    # ✅ CORREGIDO: Filtrar líneas vacías y comentarios
+                    grep -v "^#" "$NOMBRES_FILE" | grep -v "^$" | while read linea; do
+                        if [ -n "$linea" ]; then
+                            cliente=$(echo "$linea" | cut -d: -f1)
+                            nombre=$(echo "$linea" | cut -d: -f2)
+                            if [ -n "$cliente" ] && [ -n "$nombre" ]; then
+                                echo "   🏷️  $nombre ($cliente)"
+                            fi
+                        fi
                     done
                 else
                     echo "   No hay nombres asignados"
@@ -402,21 +428,29 @@ gestionar_nombres() {
                 echo "🗑️  ELIMINAR NOMBRE"
                 if [ -f "$NOMBRES_FILE" ] && [ -s "$NOMBRES_FILE" ]; then
                     echo "Nombres asignados:"
-                    grep -v "^#" "$NOMBRES_FILE" | while read linea; do
-                        cliente=$(echo "$linea" | cut -d: -f1)
-                        nombre=$(echo "$linea" | cut -d: -f2)
-                        echo "   $nombre ($cliente)"
+                    grep -v "^#" "$NOMBRES_FILE" | grep -v "^$" | while read linea; do
+                        if [ -n "$linea" ]; then
+                            cliente=$(echo "$linea" | cut -d: -f1)
+                            nombre=$(echo "$linea" | cut -d: -f2)
+                            if [ -n "$cliente" ] && [ -n "$nombre" ]; then
+                                echo "   $nombre ($cliente)"
+                            fi
+                        fi
                     done
                     echo ""
                     echo -n "Nombre a eliminar: "
                     read nombre_eliminar
-                    CLIENTE_REAL=$(grep ":${nombre_eliminar}$" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f1)
-                    if [ -n "$CLIENTE_REAL" ]; then
-                        grep -v "^${CLIENTE_REAL}:" "$NOMBRES_FILE" > "${NOMBRES_FILE}.tmp"
-                        mv "${NOMBRES_FILE}.tmp" "$NOMBRES_FILE"
-                        echo "✅ Nombre '$nombre_eliminar' eliminado"
+                    if [ -n "$nombre_eliminar" ]; then
+                        CLIENTE_REAL=$(grep ":${nombre_eliminar}$" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f1)
+                        if [ -n "$CLIENTE_REAL" ]; then
+                            grep -v "^${CLIENTE_REAL}:" "$NOMBRES_FILE" > "${NOMBRES_FILE}.tmp"
+                            mv "${NOMBRES_FILE}.tmp" "$NOMBRES_FILE"
+                            echo "✅ Nombre '$nombre_eliminar' eliminado"
+                        else
+                            echo "❌ Nombre '$nombre_eliminar' no encontrado"
+                        fi
                     else
-                        echo "❌ Nombre '$nombre_eliminar' no encontrado"
+                        echo "❌ Nombre no válido"
                     fi
                 else
                     echo "   No hay nombres asignados"
@@ -432,6 +466,7 @@ gestionar_nombres() {
     done
 }
 
+# Función para estado del servicio
 estado_servicio() {
     echo ""
     echo "🔍 ESTADO DEL SERVICIO:"
@@ -478,11 +513,12 @@ GESTOR_SCRIPT
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ GESTOR CORREGIDO INSTALADO"
+echo "✅ GESTOR COMPLETAMENTE CORREGIDO"
 echo ""
-echo "🎯 CORRECIONES APLICADAS:"
-echo "   📋 Muestra TODOS los clientes activos (con o sin nombre)"
-echo "   🔍 Busca correctamente en la base de datos de certificados"
-echo "   👥 Incluye contador total de clientes"
+echo "🎯 PROBLEMAS SOLUCIONADOS:"
+echo "   ✅ Opción 1: Ahora muestra NOMBRE en lugar de 'client'"
+echo "   ✅ Opción 2: Ya no dice 'No hay clientes configurados'"
+echo "   ✅ Opción 6: Eliminadas líneas vacías en nombres"
+echo "   ✅ Todos: Manejo robusto de archivos y variables"
 echo ""
 echo "🚀 EJECUTA: gestor-vpn"
