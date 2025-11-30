@@ -16,14 +16,17 @@ TRACKING_FILE="/etc/openvpn/clientes/tracking.txt"
 mkdir -p /etc/openvpn/clientes/
 touch "$NOMBRES_FILE"
 
-# Función para obtener nombre descriptivo (CORREGIDA)
+# Función para obtener nombre descriptivo (MEJORADA)
 obtener_nombre() {
     local cliente=$1
-    if [ ! -f "$NOMBRES_FILE" ]; then
+    if [ ! -f "$NOMBRES_FILE" ] || [ -z "$cliente" ]; then
         echo "$cliente"
         return
     fi
-    local nombre=$(grep "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2)
+    
+    # Buscar el nombre de forma más robusta
+    local nombre=$(grep "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2-)
+    
     if [ -n "$nombre" ]; then
         echo "$nombre"
     else
@@ -49,13 +52,13 @@ mostrar_menu() {
     echo -n "Selecciona [1-8]: "
 }
 
-# Función para ver clientes conectados (COMPLETAMENTE CORREGIDA)
+# Función para ver clientes conectados (COMPLETAMENTE CORREGIDA - CON NOMBRES)
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
     
     if [ -f "/var/log/openvpn-status.log" ] && grep -q "CLIENT_LIST" "/var/log/openvpn-status.log"; then
-        # ✅ CORREGIDO: Usar método más robusto
+        # ✅ CORREGIDO: Usar método más robusto y mostrar nombres
         grep "^CLIENT_LIST" "/var/log/openvpn-status.log" | while IFS= read -r line; do
             cliente=$(echo "$line" | awk '{print $2}')
             ip=$(echo "$line" | awk '{print $3}')
@@ -66,14 +69,14 @@ ver_conectados() {
             # ✅ CORREGIDO: Obtener nombre correctamente
             nombre_descriptivo=$(obtener_nombre "$cliente")
             
-            # ✅ CORREGIDO: Mostrar siempre el nombre descriptivo en el encabezado
-            echo "   👤 $nombre_descriptivo"
-            echo "      📍 IP: $ip"
-            
-            # Solo mostrar certificado si es diferente del nombre
-            if [ "$cliente" != "$nombre_descriptivo" ]; then
-                echo "      📋 Certificado: $cliente"
+            # ✅ CORREGIDO: Mostrar nombre descriptivo y certificado
+            if [ "$cliente" = "$nombre_descriptivo" ]; then
+                echo "   👤 $cliente"
+            else
+                echo "   👤 $nombre_descriptivo (certificado: $cliente)"
             fi
+            
+            echo "      📍 IP: $ip"
             
             if [ -n "$connected_since" ] && [ "$connected_since" != "UNDEF" ]; then
                 echo "      ⏰ Conectado desde: $connected_since"
@@ -516,7 +519,7 @@ echo ""
 echo "✅ GESTOR COMPLETAMENTE CORREGIDO"
 echo ""
 echo "🎯 PROBLEMAS SOLUCIONADOS:"
-echo "   ✅ Opción 1: Ahora muestra NOMBRE en lugar de 'client'"
+echo "   ✅ Opción 1: Ahora muestra 'Nombre_Asignado (certificado: client1)'"
 echo "   ✅ Opción 2: Ya no dice 'No hay clientes configurados'"
 echo "   ✅ Opción 6: Eliminadas líneas vacías en nombres"
 echo "   ✅ Todos: Manejo robusto de archivos y variables"
