@@ -1,10 +1,10 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 CORRIGIENDO TODOS LOS ERRORES"
-echo "================================"
+echo "🔧 CORRIGIENDO FUNCIÓN VER CONECTADOS"
+echo "===================================="
 
-# Crear el gestor completamente corregido
+# Crear el gestor con la función corregida
 cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
 #!/bin/sh
 
@@ -52,45 +52,51 @@ mostrar_menu() {
     echo -n "Selecciona [1-8]: "
 }
 
-# Función para ver clientes conectados (COMPLETAMENTE CORREGIDA - CON NOMBRES)
+# Función para ver clientes conectados (CORREGIDA PARA EL FORMATO REAL)
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
     
     if [ -f "/var/log/openvpn-status.log" ] && grep -q "CLIENT_LIST" "/var/log/openvpn-status.log"; then
-        # ✅ CORREGIDO: Usar método más robusto y mostrar nombres
+        # ✅ CORREGIDO: Adaptado al formato real de tu OpenVPN
         grep "^CLIENT_LIST" "/var/log/openvpn-status.log" | while IFS= read -r line; do
-            cliente=$(echo "$line" | awk '{print $2}')
-            ip=$(echo "$line" | awk '{print $3}')
-            bytes_recv=$(echo "$line" | awk '{print $4}')
-            bytes_sent=$(echo "$line" | awk '{print $5}')
-            connected_since=$(echo "$line" | awk '{print $6 " " $7}')
+            # Formato esperado: CLIENT_LIST,cliente,IP:puerto,bytes_recibidos,bytes_enviados,tiempo_conexion,fecha_conexion
+            cliente=$(echo "$line" | cut -d, -f2)
+            ip_puerto=$(echo "$line" | cut -d, -f3)
+            bytes_recv=$(echo "$line" | cut -d, -f4)
+            bytes_sent=$(echo "$line" | cut -d, -f5)
+            tiempo_conexion=$(echo "$line" | cut -d, -f6)
+            fecha_conexion=$(echo "$line" | cut -d, -f7)
             
-            # ✅ CORREGIDO: Obtener nombre correctamente
+            # ✅ CORREGIDO: Obtener nombre descriptivo
             nombre_descriptivo=$(obtener_nombre "$cliente")
             
-            # ✅ CORREGIDO: Mostrar nombre descriptivo y certificado
+            # ✅ CORREGIDO: Mostrar nombre descriptivo si está asignado
             if [ "$cliente" = "$nombre_descriptivo" ]; then
                 echo "   👤 $cliente"
             else
-                echo "   👤 $nombre_descriptivo (certificado: $cliente)"
+                echo "   👤 $nombre_descriptivo ($cliente)"
             fi
             
-            echo "      📍 IP: $ip"
+            echo "      📍 IP: $ip_puerto"
             
-            if [ -n "$connected_since" ] && [ "$connected_since" != "UNDEF" ]; then
-                echo "      ⏰ Conectado desde: $connected_since"
+            # Mostrar fecha de conexión si está disponible
+            if [ -n "$fecha_conexion" ] && [ "$fecha_conexion" != "UNDEF" ]; then
+                echo "      ⏰ Conectado desde: $fecha_conexion"
             fi
             
+            # Mostrar bytes enviados
+            if [ -n "$bytes_sent" ] && [ "$bytes_sent" -gt 0 ] 2>/dev/null; then
+                mb_sent=$((bytes_sent / 1024 / 1024))
+                echo "      🔼 Subido: ${mb_sent} MB"
+            fi
+            
+            # Mostrar bytes recibidos si están disponibles
             if [ -n "$bytes_recv" ] && [ "$bytes_recv" -gt 0 ] 2>/dev/null; then
                 mb_recv=$((bytes_recv / 1024 / 1024))
                 echo "      🔽 Descargado: ${mb_recv} MB"
             fi
             
-            if [ -n "$bytes_sent" ] && [ "$bytes_sent" -gt 0 ] 2>/dev/null; then
-                mb_sent=$((bytes_sent / 1024 / 1024))
-                echo "      🔼 Subido: ${mb_sent} MB"
-            fi
             echo ""
         done
     else
@@ -99,6 +105,7 @@ ver_conectados() {
     fi
 }
 
+# [El resto de las funciones se mantienen igual...]
 # Función para listar clientes (COMPLETAMENTE CORREGIDA)
 listar_clientes() {
     echo ""
@@ -516,12 +523,13 @@ GESTOR_SCRIPT
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ GESTOR COMPLETAMENTE CORREGIDO"
+echo "✅ FUNCIÓN VER CONECTADOS CORREGIDA"
 echo ""
-echo "🎯 PROBLEMAS SOLUCIONADOS:"
-echo "   ✅ Opción 1: Ahora muestra 'Nombre_Asignado (certificado: client1)'"
-echo "   ✅ Opción 2: Ya no dice 'No hay clientes configurados'"
-echo "   ✅ Opción 6: Eliminadas líneas vacías en nombres"
-echo "   ✅ Todos: Manejo robusto de archivos y variables"
+echo "🎯 MEJORA APLICADA:"
+echo "   ✅ Ahora detecta el formato real de tu archivo OpenVPN status"
+echo "   ✅ Muestra IPs con puerto correctamente"
+echo "   ✅ Muestra nombres descriptivos junto a los certificados"
+echo "   ✅ Maneja correctamente el formato de fecha y bytes"
 echo ""
 echo "🚀 EJECUTA: gestor-vpn"
+echo "💡 Luego usa la Opción 1 para ver clientes conectados con nombres"
