@@ -29,13 +29,13 @@ echo "   Puerto detectado: $VPN_PORT"
 echo "   Dominio detectado: $DDNS_DOMAIN"
 
 # Crear configuración OpenVPN para LuCI
-cat > /etc/config/openvpn << 'OVPN_CONFIG'
+cat > /etc/config/openvpn << OVPN_CONFIG
 config openvpn 'VPN_Server'
     option enabled '1'
     option mode 'server'
     option dev 'tap0'
     option proto 'udp'
-    option port '1194'
+    option port '$VPN_PORT'
     option tls_server '1'
     option ca '/etc/openvpn/ca.crt'
     option cert '/etc/openvpn/server.crt'
@@ -76,23 +76,43 @@ echo ""
 echo "🔐 VERIFICANDO CERTIFICADOS:"
 echo "---------------------------"
 
-CERT_FILES=(
-    "/etc/openvpn/ca.crt"
-    "/etc/openvpn/server.crt" 
-    "/etc/openvpn/server.key"
-    "/etc/openvpn/dh.pem"
-    "/etc/openvpn/crl.pem"
-)
+echo "   [....] Verificando archivos de certificados..."
 
-for cert_file in "${CERT_FILES[@]}"; do
-    if [ -f "$cert_file" ]; then
-        echo "✅ $cert_file: EXISTE"
-        # Ajustar permisos
-        chmod 600 "$cert_file" 2>/dev/null
-    else
-        echo "❌ $cert_file: FALTANTE"
-    fi
-done
+# Verificar cada archivo individualmente
+if [ -f "/etc/openvpn/ca.crt" ]; then
+    echo "✅ /etc/openvpn/ca.crt: EXISTE"
+    chmod 644 /etc/openvpn/ca.crt
+else
+    echo "❌ /etc/openvpn/ca.crt: FALTANTE"
+fi
+
+if [ -f "/etc/openvpn/server.crt" ]; then
+    echo "✅ /etc/openvpn/server.crt: EXISTE"
+    chmod 644 /etc/openvpn/server.crt
+else
+    echo "❌ /etc/openvpn/server.crt: FALTANTE"
+fi
+
+if [ -f "/etc/openvpn/server.key" ]; then
+    echo "✅ /etc/openvpn/server.key: EXISTE"
+    chmod 600 /etc/openvpn/server.key
+else
+    echo "❌ /etc/openvpn/server.key: FALTANTE"
+fi
+
+if [ -f "/etc/openvpn/dh.pem" ]; then
+    echo "✅ /etc/openvpn/dh.pem: EXISTE"
+    chmod 644 /etc/openvpn/dh.pem
+else
+    echo "❌ /etc/openvpn/dh.pem: FALTANTE"
+fi
+
+if [ -f "/etc/openvpn/crl.pem" ]; then
+    echo "✅ /etc/openvpn/crl.pem: EXISTE"
+    chmod 644 /etc/openvpn/crl.pem
+else
+    echo "❌ /etc/openvpn/crl.pem: FALTANTE"
+fi
 
 # 4. Crear interfaz TAP si no existe
 echo ""
@@ -111,13 +131,15 @@ else
 fi
 
 # Crear dispositivo TAP
-if ! grep -q "tap0" /etc/config/network 2>/dev/null | grep -q "device"; then
-    cat >> /etc/config/network << 'NETWORK_CONFIG'
-
-config device
-    option name 'tap0'
-    option type 'tap'
-NETWORK_CONFIG
+if ! grep -q "name.*tap0" /etc/config/network 2>/dev/null; then
+    echo "   [....] Agregando dispositivo tap0..."
+    uci add network device
+    uci set network.@device[-1].name='tap0'
+    uci set network.@device[-1].type='tap'
+    uci commit network
+    echo "   ✅ Dispositivo tap0 agregado"
+else
+    echo "   ✅ Dispositivo tap0 ya existe"
 fi
 
 # 5. Configurar firewall para OpenVPN
@@ -147,18 +169,20 @@ echo "------------------------"
 
 echo "   [....] Reiniciando firewall..."
 /etc/init.d/firewall reload >/dev/null 2>&1
+sleep 2
 
 echo "   [....] Reiniciando red..."
 /etc/init.d/network reload >/dev/null 2>&1
+sleep 2
 
 echo "   [....] Reiniciando OpenVPN..."
-/etc/init.d/openvpn enable
-/etc/init.d/openvpn restart
+/etc/init.d/openvpn enable >/dev/null 2>&1
+/etc/init.d/openvpn restart >/dev/null 2>&1
+sleep 3
 
 echo "   [....] Reiniciando LuCI..."
-/etc/init.d/uhttpd restart
-
-sleep 3
+/etc/init.d/uhttpd restart >/dev/null 2>&1
+sleep 2
 
 # 7. Verificación final
 echo ""
@@ -201,4 +225,7 @@ echo "      - Status (pestaña)"
 echo "      - OpenVPN Instances (pestaña)" 
 echo "      - Configuration (pestaña)"
 echo ""
-echo "💡 Si aún no aparece, limpia la cache del navegador"
+echo "💡 Si aún no aparece, limpia la cache del navegador o usa modo incógnito"
+
+echo ""
+echo "✨ CONFIGURACIÓN COMPLETADA"
