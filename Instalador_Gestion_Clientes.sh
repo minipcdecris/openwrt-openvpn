@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 CORRIGIENDO FUNCIÓN VER CONECTADOS"
-echo "===================================="
+echo "🔧 CORRIGIENDO FUNCIÓN VER CONECTADOS - FORMATO TABULACIONES"
+echo "============================================================"
 
 # Crear el gestor con la función corregida
 cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
@@ -52,21 +52,21 @@ mostrar_menu() {
     echo -n "Selecciona [1-8]: "
 }
 
-# Función para ver clientes conectados (CORREGIDA PARA EL FORMATO REAL)
+# Función para ver clientes conectados (CORREGIDA PARA TABULACIONES)
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
     
     if [ -f "/var/log/openvpn-status.log" ] && grep -q "CLIENT_LIST" "/var/log/openvpn-status.log"; then
-        # ✅ CORREGIDO: Adaptado al formato real de tu OpenVPN
-        grep "^CLIENT_LIST" "/var/log/openvpn-status.log" | while IFS= read -r line; do
-            # Formato esperado: CLIENT_LIST,cliente,IP:puerto,bytes_recibidos,bytes_enviados,tiempo_conexion,fecha_conexion
-            cliente=$(echo "$line" | cut -d, -f2)
-            ip_puerto=$(echo "$line" | cut -d, -f3)
-            bytes_recv=$(echo "$line" | cut -d, -f4)
-            bytes_sent=$(echo "$line" | cut -d, -f5)
-            tiempo_conexion=$(echo "$line" | cut -d, -f6)
-            fecha_conexion=$(echo "$line" | cut -d, -f7)
+        # ✅ CORREGIDO: Usar awk para procesar tabulaciones
+        grep "^CLIENT_LIST" "/var/log/openvpn-status.log" | while IFS=$'\t' read -r _ cliente ip_externa ip_interna bytes_recv bytes_sent connected_since _; do
+            # Limpiar variables de posibles espacios
+            cliente=$(echo "$cliente" | xargs)
+            ip_externa=$(echo "$ip_externa" | xargs)
+            ip_interna=$(echo "$ip_interna" | xargs)
+            bytes_recv=$(echo "$bytes_recv" | xargs)
+            bytes_sent=$(echo "$bytes_sent" | xargs)
+            connected_since=$(echo "$connected_since" | xargs)
             
             # ✅ CORREGIDO: Obtener nombre descriptivo
             nombre_descriptivo=$(obtener_nombre "$cliente")
@@ -78,11 +78,12 @@ ver_conectados() {
                 echo "   👤 $nombre_descriptivo ($cliente)"
             fi
             
-            echo "      📍 IP: $ip_puerto"
+            echo "      📍 IP Externa: $ip_externa"
+            echo "      📍 IP Interna: $ip_interna"
             
             # Mostrar fecha de conexión si está disponible
-            if [ -n "$fecha_conexion" ] && [ "$fecha_conexion" != "UNDEF" ]; then
-                echo "      ⏰ Conectado desde: $fecha_conexion"
+            if [ -n "$connected_since" ] && [ "$connected_since" != "UNDEF" ]; then
+                echo "      ⏰ Conectado desde: $connected_since"
             fi
             
             # Mostrar bytes enviados
@@ -523,11 +524,11 @@ GESTOR_SCRIPT
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ FUNCIÓN VER CONECTADOS CORREGIDA"
+echo "✅ FUNCIÓN VER CONECTADOS CORREGIDA - FORMATO TABULACIONES"
 echo ""
 echo "🎯 MEJORA APLICADA:"
-echo "   ✅ Ahora detecta el formato real de tu archivo OpenVPN status"
-echo "   ✅ Muestra IPs con puerto correctamente"
+echo "   ✅ Ahora procesa correctamente las tabulaciones del archivo OpenVPN"
+echo "   ✅ Muestra IP externa e interna por separado"
 echo "   ✅ Muestra nombres descriptivos junto a los certificados"
 echo "   ✅ Maneja correctamente el formato de fecha y bytes"
 echo ""
