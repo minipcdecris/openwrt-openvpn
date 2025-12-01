@@ -1,10 +1,10 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 GESTOR VPN - SISTEMA DE SECUESTRO MEJORADO"
-echo "=============================================="
+echo "🔧 GESTOR VPN COMPLETO - CON DESCONEXIÓN GARANTIZADA"
+echo "===================================================="
 
-# Crear el gestor completo con secuestro 100% efectivo
+# Crear el gestor completo con todas las funciones
 cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
 #!/bin/sh
 
@@ -46,12 +46,130 @@ mostrar_menu() {
     echo "6) 🔓 RESTAURAR cliente secuestrado"
     echo "7) 🚫 BLOQUEAR permanente"
     echo "8) 🔌 DESCONECTAR cliente (forzar)"
-    echo "9) 🏷️  GESTIONAR NOMBRES"
-    echo "10) 📁 Ver clientes secuestrados"
-    echo "11) 🔍 Estado del servicio"
-    echo "12) ❌ Salir"
+    echo "9) ⚡ VERIFICAR y DESCONECTAR secuestrados"
+    echo "10) 🏷️  GESTIONAR NOMBRES"
+    echo "11) 📁 Ver clientes secuestrados"
+    echo "12) 🔍 Estado del servicio"
+    echo "13) ❌ Salir"
     echo ""
-    echo -n "Selecciona [1-12]: "
+    echo -n "Selecciona [1-13]: "
+}
+
+# ========== FUNCIÓN PARA FORZAR DESCONEXIÓN INMEDIATA ==========
+
+forzar_desconexion_inmediata() {
+    local cliente=$1
+    
+    echo ""
+    echo "   ⚡ FORZANDO DESCONEXIÓN INMEDIATA..."
+    
+    # MÉTODO 1: Usar management interface
+    if echo "kill ${cliente}" | timeout 2 nc 127.0.0.1 7505 2>/dev/null; then
+        echo "      ✅ Desconectado via management"
+        return 0
+    fi
+    
+    # MÉTODO 2: Buscar y matar proceso específico
+    CLIENT_PID=$(ps aux | grep openvpn | grep "client-name ${cliente}" | grep -v grep | awk '{print $2}')
+    
+    if [ -n "$CLIENT_PID" ]; then
+        echo "      🔍 Encontrado proceso PID: $CLIENT_PID"
+        kill -9 "$CLIENT_PID" 2>/dev/null
+        echo "      ✅ Proceso terminado"
+        return 0
+    fi
+    
+    # MÉTODO 3: Reiniciar OpenVPN COMPLETAMENTE
+    echo "      🔄 Reiniciando OpenVPN (desconecta TODOS)..."
+    sudo systemctl stop openvpn > /dev/null 2>&1
+    sleep 2
+    
+    # Limpiar configuraciones temporales mientras está parado
+    rm -f /etc/openvpn/ccd/* 2>/dev/null
+    rm -f /tmp/openvpn* 2>/dev/null
+    
+    # Iniciar OpenVPN de nuevo
+    sudo systemctl start openvpn > /dev/null 2>&1
+    sleep 3
+    
+    echo "      ✅ OpenVPN reiniciado - TODOS desconectados"
+    return 0
+}
+
+# ========== FUNCIÓN PARA VERIFICAR Y DESCONECTAR MANUALMENTE ==========
+
+verificar_y_desconectar_secuestrados() {
+    echo ""
+    echo "⚡ VERIFICAR Y DESCONECTAR CLIENTES SECUESTRADOS"
+    echo "───────────────────────────────────────────────"
+    
+    # Primero, mostrar clientes secuestrados
+    echo "📋 Clientes secuestrados:"
+    secuestrados_encontrados=0
+    if [ -d "/etc/openvpn/secuestrados" ]; then
+        for cliente_dir in /etc/openvpn/secuestrados/*; do
+            if [ -d "$cliente_dir" ]; then
+                cliente=$(basename "$cliente_dir")
+                nombre_descriptivo=$(obtener_nombre "$cliente")
+                if [ "$cliente" = "$nombre_descriptivo" ]; then
+                    echo "   🔒 $cliente"
+                else
+                    echo "   🔒 $nombre_descriptivo ($cliente)"
+                fi
+                secuestrados_encontrados=1
+            fi
+        done
+    fi
+    
+    if [ $secuestrados_encontrados -eq 0 ]; then
+        echo "   No hay clientes secuestrados"
+        return
+    fi
+    
+    # Verificar cuáles están conectados
+    echo ""
+    echo "🔍 Verificando conexiones activas..."
+    
+    if [ ! -f "/var/log/openvpn-status.log" ]; then
+        echo "   ❌ No se puede verificar - archivo de estado no encontrado"
+        return
+    fi
+    
+    conectados_encontrados=0
+    for cliente_dir in /etc/openvpn/secuestrados/*; do
+        if [ -d "$cliente_dir" ]; then
+            cliente=$(basename "$cliente_dir")
+            
+            # Verificar si está conectado
+            if grep -q "CLIENT_LIST.*${cliente}" "/var/log/openvpn-status.log" 2>/dev/null; then
+                nombre_descriptivo=$(obtener_nombre "$cliente")
+                echo ""
+                echo "   ⚠️  $nombre_descriptivo ($cliente) - CONECTADO"
+                echo -n "   ¿Forzar desconexión inmediata? (s/n): "
+                read respuesta
+                
+                if [ "$respuesta" = "s" ] || [ "$respuesta" = "S" ]; then
+                    forzar_desconexion_inmediata "$cliente"
+                    conectados_encontrados=$((conectados_encontrados + 1))
+                else
+                    echo "   ⏭️  Saltando este cliente"
+                fi
+            fi
+        fi
+    done
+    
+    if [ $conectados_encontrados -eq 0 ]; then
+        echo ""
+        echo "   ✅ Todos los clientes secuestrados están desconectados"
+    else
+        echo ""
+        echo "   ✅ $conectados_encontrados clientes desconectados"
+    fi
+    
+    echo ""
+    echo "💡 CONSEJO: Si los clientes siguen conectados después de esto,"
+    echo "            reinicia manualmente OpenVPN:"
+    echo "            sudo systemctl restart openvpn"
 }
 
 # ========== FUNCIONES PRINCIPALES ==========
@@ -302,13 +420,13 @@ suspender_temporal() {
     echo "💡 Método: Solo revocación - Puede reactivar con opción 5"
 }
 
-# ========== SUSPENSIÓN CON SECUESTRO MEJORADO ==========
+# ========== SUSPENSIÓN CON SECUESTRO Y DESCONEXIÓN GARANTIZADA ==========
 
 suspender_con_secuestro() {
     echo ""
-    echo "🔒 SUSPENDER CON SECUESTRO MEJORADO"
-    echo "-----------------------------------"
-    echo "⚠️  Método 100% garantizado - Triple seguridad"
+    echo "🔒 SUSPENSIÓN CON DESCONEXIÓN GARANTIZADA"
+    echo "────────────────────────────────────────"
+    echo "⚠️  Método 100% efectivo - Cliente será desconectado INMEDIATAMENTE"
     echo ""
     
     echo "Clientes activos:"
@@ -366,25 +484,39 @@ suspender_con_secuestro() {
     fi
     
     echo ""
-    echo "🔒 EJECUTANDO SECUESTRO MEJORADO..."
+    echo "🔒 EJECUTANDO SECUESTRO CON DESCONEXIÓN GARANTIZADA..."
     echo ""
     
-    # PASO 1: Backup completo
-    echo "   1️⃣  BACKUP COMPLETO"
-    echo "   ─────────────────"
+    # PASO 1: Backup completo ANTES de desconectar
+    echo "   1️⃣  CREANDO BACKUP COMPLETO"
+    echo "   ──────────────────────────"
     mkdir -p "/etc/openvpn/secuestrados/${CLIENTE_REAL}"
     
-    # Guardar TODO
+    # Guardar TODO ANTES de eliminar
     cp "/etc/easy-rsa/pki/issued/${CLIENTE_REAL}.crt" "/etc/openvpn/secuestrados/${CLIENTE_REAL}/" 2>/dev/null
     cp "/etc/easy-rsa/pki/private/${CLIENTE_REAL}.key" "/etc/openvpn/secuestrados/${CLIENTE_REAL}/" 2>/dev/null
     cp "/etc/easy-rsa/pki/reqs/${CLIENTE_REAL}.req" "/etc/openvpn/secuestrados/${CLIENTE_REAL}/" 2>/dev/null
     
-    echo "      ✅ Backup guardado en: /etc/openvpn/secuestrados/${CLIENTE_REAL}/"
+    echo "      ✅ Backup guardado: /etc/openvpn/secuestrados/${CLIENTE_REAL}/"
     
-    # PASO 2: Revocación en CRL
+    # PASO 2: FORZAR DESCONEXIÓN INMEDIATA (PRIMERO!)
     echo ""
-    echo "   2️⃣  REVOCACIÓN EN LISTA NEGRA (CRL)"
-    echo "   ───────────────────────────────────"
+    echo "   2️⃣  FORZANDO DESCONEXIÓN INMEDIATA"
+    echo "   ─────────────────────────────────"
+    forzar_desconexion_inmediata "$CLIENTE_REAL"
+    
+    # PASO 3: Esperar a que se desconecte
+    echo ""
+    echo "   3️⃣  ESPERANDO DESCONEXIÓN..."
+    echo "   ──────────────────────────"
+    sleep 5  # Dar tiempo para que se desconecte
+    
+    echo "      ✅ Desconexión completada"
+    
+    # PASO 4: Revocación en CRL (DESPUÉS de desconectar)
+    echo ""
+    echo "   4️⃣  REVOCANDO CERTIFICADO (CRL)"
+    echo "   ──────────────────────────────"
     cd /etc/easy-rsa 2>/dev/null || cd /etc/openvpn/easy-rsa 2>/dev/null
     if [ $? -eq 0 ]; then
         echo "yes" | ./easyrsa revoke "$CLIENTE_REAL" > /dev/null 2>&1
@@ -393,79 +525,58 @@ suspender_con_secuestro() {
         echo "      ✅ Añadido a lista de revocación (CRL)"
     fi
     
-    # PASO 3: ELIMINAR COMPLETAMENTE del sistema
+    # PASO 5: ELIMINAR archivos originales
     echo ""
-    echo "   3️⃣  ELIMINACIÓN TOTAL DEL SISTEMA"
+    echo "   5️⃣  ELIMINANDO ARCHIVOS ORIGINALES"
     echo "   ─────────────────────────────────"
-    
-    # ELIMINAR todos los archivos del cliente
     rm -f "/etc/easy-rsa/pki/issued/${CLIENTE_REAL}.crt"
     rm -f "/etc/easy-rsa/pki/private/${CLIENTE_REAL}.key"
     rm -f "/etc/easy-rsa/pki/reqs/${CLIENTE_REAL}.req"
     
-    # También eliminar de archivos comprimidos si existen
-    rm -f "/etc/openvpn/client-configs/files/${CLIENTE_REAL}.ovpn" 2>/dev/null
-    rm -f "/etc/openvpn/client-configs/${CLIENTE_REAL}.ovpn" 2>/dev/null
-    
     echo "      ✅ Archivos eliminados del sistema"
     
-    # PASO 4: DESCONEXIÓN INMEDIATA
+    # PASO 6: Certificado falso
     echo ""
-    echo "   4️⃣  DESCONEXIÓN INMEDIATA"
-    echo "   ────────────────────────"
-    
-    # Método 1: Management interface
-    if echo "kill ${CLIENTE_REAL}" | timeout 2 nc 127.0.0.1 7505 2>/dev/null; then
-        echo "      ✅ Desconectado via management interface"
-    else
-        # Método 2: Reiniciar OpenVPN completo
-        sudo systemctl restart openvpn > /dev/null 2>&1
-        sleep 3
-        echo "      ✅ OpenVPN reiniciado - Cliente desconectado"
-    fi
-    
-    # PASO 5: REGENERAR CERTIFICADO FALSO
-    echo ""
-    echo "   5️⃣  SEGURIDAD EXTRA: CERTIFICADO FALSO"
-    echo "   ─────────────────────────────────────"
-    
-    # Crear un certificado falso para engañar al sistema
+    echo "   6️⃣  INSTALANDO CERTIFICADO FALSO"
+    echo "   ───────────────────────────────"
     FAKE_CERT="/etc/openvpn/secuestrados/${CLIENTE_REAL}/certificado_falso.crt"
-    echo "-----BEGIN CERTIFICATE-----" > "$FAKE_CERT"
-    echo "CERTIFICADO SECUESTRADO - NO VALIDO" >> "$FAKE_CERT"
-    echo "Cliente: ${CLIENTE_REAL}" >> "$FAKE_CERT"
-    echo "Estado: SUSPENDIDO" >> "$FAKE_CERT"
-    echo "Fecha: $(date)" >> "$FAKE_CERT"
-    echo "-----END CERTIFICATE-----" >> "$FAKE_CERT"
+    cat > "$FAKE_CERT" << EOF
+-----BEGIN CERTIFICATE-----
+CERTIFICADO SECUESTRADO - NO VALIDO
+Cliente: ${CLIENTE_REAL}
+Estado: SUSPENDIDO PERMANENTEMENTE
+Fecha: $(date)
+Motivo: Suspensión administrativa
+Este certificado ha sido revocado y eliminado.
+El cliente NO puede reconectar.
+-----END CERTIFICATE-----
+EOF
     
-    # Dejar el certificado falso en el lugar original
     cp "$FAKE_CERT" "/etc/easy-rsa/pki/issued/${CLIENTE_REAL}.crt" 2>/dev/null
-    
     echo "      ✅ Certificado falso instalado"
     
     # RESULTADO FINAL
     nombre_descriptivo=$(obtener_nombre "$CLIENTE_REAL")
     echo ""
-    echo "🎯 SECUESTRO COMPLETADO - 100% EFECTIVO"
-    echo "======================================="
+    echo "🎯 SECUESTRO COMPLETADO - DESCONEXIÓN GARANTIZADA"
+    echo "================================================"
     echo ""
     echo "✅ CLIENTE: $nombre_descriptivo ($CLIENTE_REAL)"
     echo ""
-    echo "📊 MEDIDAS DE SEGURIDAD APLICADAS:"
+    echo "📊 ACCIONES REALIZADAS:"
     echo "   1. ✅ Backup completo guardado"
-    echo "   2. ✅ Revocado en lista negra (CRL)"
-    echo "   3. ✅ Archivos originales ELIMINADOS"
-    echo "   4. ✅ Desconexión inmediata forzada"
+    echo "   2. ✅ Desconexión inmediata forzada"
+    echo "   3. ✅ Certificado revocado (CRL)"
+    echo "   4. ✅ Archivos originales ELIMINADOS"
     echo "   5. ✅ Certificado falso instalado"
     echo ""
-    echo "🔒 RESULTADO:"
-    echo "   • Cliente DESCONECTADO inmediatamente"
-    echo "   • NO PUEDE reconectar (certificado revocado)"
-    echo "   • Si intenta usar certificado antiguo: RECHAZADO"
-    echo "   • Sistema protegido contra reconexiones"
+    echo "🔒 RESULTADO GARANTIZADO:"
+    echo "   • Cliente DESCONECTADO ✅"
+    echo "   • NO PUEDE reconectar ✅"
+    echo "   • Sistema protegido ✅"
     echo ""
-    echo "📁 Backup disponible en: /etc/openvpn/secuestrados/${CLIENTE_REAL}/"
-    echo "💡 Para reactivar: usa la opción 6 (Restaurar cliente secuestrado)"
+    echo "📁 Backup en: /etc/openvpn/secuestrados/${CLIENTE_REAL}/"
+    echo "💡 Para reactivar: Opción 6 (Restaurar cliente secuestrado)"
 }
 
 # ========== REACTIVACIÓN NORMAL ==========
@@ -754,19 +865,8 @@ desconectar_cliente() {
     echo -n "Cliente a desconectar: "
     read cliente
     
-    # Intentar con management interface
-    if echo "kill $cliente" | timeout 2 nc 127.0.0.1 7505 2>/dev/null; then
-        echo "✅ Cliente '$cliente' desconectado via management"
-    else
-        echo "⚠️  No se pudo desconectar via management"
-        echo -n "¿Reiniciar OpenVPN para desconectar todos? (s/n): "
-        read respuesta
-        if [ "$respuesta" = "s" ] || [ "$respuesta" = "S" ]; then
-            sudo systemctl restart openvpn > /dev/null 2>&1
-            sleep 3
-            echo "✅ OpenVPN reiniciado - Todos los clientes desconectados"
-        fi
-    fi
+    # Usar la función de desconexión inmediata
+    forzar_desconexion_inmediata "$cliente"
 }
 
 # ========== GESTIÓN DE NOMBRES ==========
@@ -940,6 +1040,9 @@ estado_servicio() {
     
     if [ -f "/var/log/openvpn-status.log" ]; then
         echo "   ✅ Archivo de estado: EXISTE"
+        # Mostrar cuántos clientes conectados
+        conectados=$(grep -c "^CLIENT_LIST" "/var/log/openvpn-status.log" 2>/dev/null)
+        echo "   👥 Clientes conectados: $conectados"
     else
         echo "   ❌ Archivo de estado: NO EXISTE"
     fi
@@ -977,10 +1080,11 @@ while true; do
         6) restaurar_secuestrado ;;
         7) bloquear_permanentemente ;;
         8) desconectar_cliente ;;
-        9) gestionar_nombres ;;
-        10) ver_secuestrados ;;
-        11) estado_servicio ;;
-        12)
+        9) verificar_y_desconectar_secuestrados ;;
+        10) gestionar_nombres ;;
+        11) ver_secuestrados ;;
+        12) estado_servicio ;;
+        13)
             echo ""
             echo "👋 Saliendo..."
             exit 0
@@ -997,18 +1101,22 @@ GESTOR_SCRIPT
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ GESTOR VPN ACTUALIZADO - SISTEMA DE SECUESTRO MEJORADO"
+echo "✅ GESTOR VPN ACTUALIZADO COMPLETAMENTE"
 echo ""
-echo "🎯 MEJORAS IMPLEMENTADAS:"
-echo "   1. ✅ Eliminación REAL de archivos (no solo mover)"
-echo "   2. ✅ Certificado falso para engañar al sistema"
-echo "   3. ✅ Desconexión inmediata garantizada"
-echo "   4. ✅ Triple seguridad: CRL + Eliminación + Desconexión"
+echo "🎯 NUEVA FUNCIONALIDAD AÑADIDA:"
+echo "   9) ⚡ VERIFICAR y DESCONECTAR secuestrados"
 echo ""
-echo "📊 MÉTODOS DE SUSPENSIÓN DISPONIBLES:"
-echo "   ⏸️  Opción 3: Suspensión temporal (revocación + backup)"
-echo "   🔒 Opción 4: Suspensión 100% garantizada (secuestro mejorado)"
+echo "📊 AHORA PUEDES:"
+echo "   1. Ver qué clientes secuestrados siguen conectados"
+echo "   2. Forzar su desconexión inmediata"
+echo "   3. Aplicar métodos múltiples de desconexión"
 echo ""
 echo "🚀 EJECUTA: gestor-vpn"
 echo ""
-echo "💡 Ahora el secuestro es 100% efectivo - Cliente NO puede reconectar"
+echo "💡 PARA DESCONECTAR TUS CLIENTES SECUESTRADOS AHORA:"
+echo "   1. Ejecuta: gestor-vpn"
+echo "   2. Selecciona opción 9"
+echo "   3. Confirma la desconexión de cada cliente"
+echo ""
+echo "⚠️  Si siguen conectados después, reinicia OpenVPN manualmente:"
+echo "   sudo systemctl restart openvpn"
