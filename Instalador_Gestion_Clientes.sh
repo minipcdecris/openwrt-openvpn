@@ -37,7 +37,7 @@ obtener_nombre() {
     fi
 }
 
-# Función para mostrar menú
+# Función para mostrar menú (MODIFICADA - OPCIÓN 5 ELIMINADA)
 mostrar_menu() {
     echo ""
     echo "🔧 GESTOR VPN - CON NOMBRES DESCRIPTIVOS"
@@ -47,12 +47,11 @@ mostrar_menu() {
     echo "2) 📋 Listar todos los clientes"
     echo "3) ⏸️  SUSPENDER cliente (temporal)"
     echo "4) ▶️  REACTIVAR cliente (mismo certificado)"
-    echo "5) 🚫 BLOQUEAR permanente (nuevo certificado)"
-    echo "6) 🏷️  GESTIONAR NOMBRES"
-    echo "7) 🔍 Estado del servicio"
-    echo "8) ❌ Salir"
+    echo "5) 🏷️  GESTIONAR NOMBRES"
+    echo "6) 🔍 Estado del servicio"
+    echo "7) ❌ Salir"
     echo ""
-    echo -n "Selecciona [1-8]: "
+    echo -n "Selecciona [1-7]: "
 }
 
 # Función para ver clientes conectados (CORREGIDA)
@@ -185,8 +184,8 @@ listar_clientes() {
     fi
     
     echo ""
-    echo "🔴 BLOQUEADOS:"
-    bloqueados_encontrados=0
+    echo "🔴 REVOCADOS PERMANENTES:"
+    revocados_encontrados=0
     for cliente in $todos_clientes; do
         if grep -q "^R.*/CN=${cliente}$" "$INDEX_FILE" 2>/dev/null || grep -q "^R.*${cliente}" "$INDEX_FILE" 2>/dev/null; then
             if [ ! -f "/etc/openvpn/suspended/${cliente}.crt.backup" ]; then
@@ -196,11 +195,11 @@ listar_clientes() {
                 else
                     echo "   $nombre_descriptivo ($cliente)"
                 fi
-                bloqueados_encontrados=1
+                revocados_encontrados=1
             fi
         fi
     done
-    if [ $bloqueados_encontrados -eq 0 ]; then
+    if [ $revocados_encontrados -eq 0 ]; then
         echo "   Ninguno"
     fi
     
@@ -208,11 +207,14 @@ listar_clientes() {
     echo "💡 Total clientes en sistema: $(echo "$todos_clientes" | wc -w)"
 }
 
-# Función para suspender cliente
+# Función para suspender cliente TEMPORAL (CORREGIDA)
 suspender_cliente() {
     echo ""
     echo "⏸️  SUSPENDER CLIENTE (TEMPORAL)"
     echo "------------------------------"
+    echo "⚠️  Esta acción suspenderá al cliente temporalmente"
+    echo "   El certificado se mantendrá para futura reactivación"
+    echo ""
     
     echo "Clientes activos:"
     activos_encontrados=0
@@ -270,8 +272,26 @@ suspender_cliente() {
         return
     fi
     
-    echo "   [....] Suspendiendo cliente..."
+    echo ""
+    echo "⚠️  CONFIRMACIÓN DE SUSPENSIÓN TEMPORAL"
+    echo "-------------------------------------"
+    nombre_descriptivo=$(obtener_nombre "$CLIENTE_REAL")
+    echo "Cliente: $nombre_descriptivo ($CLIENTE_REAL)"
+    echo ""
+    echo -n "¿Estás seguro de suspender temporalmente? (s/N): "
+    read confirmacion
+    
+    if [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ]; then
+        echo "❌ Suspensión cancelada"
+        return
+    fi
+    
+    echo "   [⏳] Suspendiendo cliente temporalmente..."
+    
+    # Crear directorio para suspensiones temporales si no existe
     mkdir -p /etc/openvpn/suspended/
+    
+    # Guardar copia de seguridad para futura reactivación (SUSPENSIÓN TEMPORAL)
     cp "/etc/easy-rsa/pki/issued/${CLIENTE_REAL}.crt" "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" 2>/dev/null || \
     cp "/etc/openvpn/easy-rsa/pki/issued/${CLIENTE_REAL}.crt" "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" 2>/dev/null || \
     cp "/etc/easy-rsa/keys/${CLIENTE_REAL}.crt" "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" 2>/dev/null
@@ -280,18 +300,32 @@ suspender_cliente() {
     cp "/etc/openvpn/easy-rsa/pki/private/${CLIENTE_REAL}.key" "/etc/openvpn/suspended/${CLIENTE_REAL}.key.backup" 2>/dev/null || \
     cp "/etc/easy-rsa/keys/${CLIENTE_REAL}.key" "/etc/openvpn/suspended/${CLIENTE_REAL}.key.backup" 2>/dev/null
     
+    # Revocar certificado (esto impide la conexión)
     cd /etc/easy-rsa 2>/dev/null || cd /etc/openvpn/easy-rsa 2>/dev/null
     if [ $? -eq 0 ]; then
+        echo "   [🔒] Revocando certificado..."
         echo "yes" | ./easyrsa revoke "$CLIENTE_REAL" > /dev/null 2>&1
+        echo "   [🔄] Generando nueva lista de revocación..."
         ./easyrsa gen-crl > /dev/null 2>&1
         cp pki/crl.pem /etc/openvpn/ 2>/dev/null
+        echo "   [✅] Certificado revocado temporalmente"
     fi
     
+    # Reiniciar OpenVPN para aplicar cambios
+    echo "   [🔄] Reiniciando servicio OpenVPN..."
     /etc/init.d/openvpn restart > /dev/null 2>&1
     sleep 2
     
-    nombre_descriptivo=$(obtener_nombre "$CLIENTE_REAL")
-    echo "✅ CLIENTE '$nombre_descriptivo' SUSPENDIDO"
+    echo ""
+    echo "✅ SUSPENSIÓN TEMPORAL COMPLETADA"
+    echo "================================="
+    echo "👤 Cliente: $nombre_descriptivo"
+    echo "📋 Certificado: $CLIENTE_REAL"
+    echo "⏳ Estado: SUSPENDIDO TEMPORALMENTE"
+    echo "💾 Backup guardado en: /etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup"
+    echo ""
+    echo "💡 Para reactivar este cliente, usa la opción 4 (REACTIVAR CLIENTE)"
+    echo "   Se usará el mismo certificado sin necesidad de generar uno nuevo"
 }
 
 # Función para reactivar cliente
@@ -299,8 +333,10 @@ reactivar_cliente() {
     echo ""
     echo "▶️  REACTIVAR CLIENTE"
     echo "-------------------"
+    echo "⚠️  Reactivación usando el MISMO certificado"
+    echo ""
     
-    echo "Clientes suspendidos:"
+    echo "Clientes suspendidos temporalmente:"
     suspendidos_encontrados=0
     
     # Buscar base de datos
@@ -328,7 +364,10 @@ reactivar_cliente() {
     fi
     
     if [ $suspendidos_encontrados -eq 0 ]; then
-        echo "   No hay clientes suspendidos"
+        echo "   No hay clientes suspendidos temporalmente"
+        echo ""
+        echo "💡 Solo se pueden reactivar clientes suspendidos temporalmente"
+        echo "   (aquellos que tienen backup en /etc/openvpn/suspended/)"
         return
     fi
     
@@ -345,11 +384,32 @@ reactivar_cliente() {
     fi
     
     if [ ! -f "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" ]; then
-        echo "❌ Cliente '$INPUT_CLIENTE' no está suspendido"
+        echo "❌ Cliente '$INPUT_CLIENTE' no está suspendido temporalmente"
+        echo ""
+        echo "💡 Solo se pueden reactivar clientes con suspensión temporal"
+        echo "   (debe existir: /etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup)"
         return
     fi
     
-    echo "   [....] Reactivando cliente..."
+    echo ""
+    echo "⚠️  CONFIRMACIÓN DE REACTIVACIÓN"
+    echo "-------------------------------"
+    nombre_descriptivo=$(obtener_nombre "$CLIENTE_REAL")
+    echo "Cliente: $nombre_descriptivo ($CLIENTE_REAL)"
+    echo "Tipo: Reactivación con MISMO certificado"
+    echo ""
+    echo -n "¿Estás seguro de reactivar? (s/N): "
+    read confirmacion
+    
+    if [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ]; then
+        echo "❌ Reactivación cancelada"
+        return
+    fi
+    
+    echo "   [⏳] Reactivando cliente..."
+    
+    # Restaurar certificado desde backup (MISMO CERTIFICADO)
+    echo "   [💾] Restaurando certificado original..."
     cp "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" "/etc/easy-rsa/pki/issued/${CLIENTE_REAL}.crt" 2>/dev/null || \
     cp "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" "/etc/openvpn/easy-rsa/pki/issued/${CLIENTE_REAL}.crt" 2>/dev/null || \
     cp "/etc/openvpn/suspended/${CLIENTE_REAL}.crt.backup" "/etc/easy-rsa/keys/${CLIENTE_REAL}.crt" 2>/dev/null
@@ -361,96 +421,31 @@ reactivar_cliente() {
     # Buscar directorio easy-rsa
     cd /etc/easy-rsa 2>/dev/null || cd /etc/openvpn/easy-rsa 2>/dev/null
     if [ $? -eq 0 ]; then
-        # Eliminar línea del índice para reactivar
+        # Eliminar línea del índice para reactivar (quitar revocación)
+        echo "   [🔄] Quitando revocación del certificado..."
         sed -i "/\/CN=${CLIENTE_REAL}$/d" pki/index.txt 2>/dev/null
+        # Añadir como válido nuevamente
+        echo "V\t$(date +'%y%m%d%H%M%SZ')\t\t$(openssl x509 -in "pki/issued/${CLIENTE_REAL}.crt" -serial -noout 2>/dev/null | cut -d= -f2)\tunknown\t/CN=${CLIENTE_REAL}" >> pki/index.txt 2>/dev/null
+        
+        echo "   [📋] Generando nueva lista de revocación..."
         ./easyrsa gen-crl > /dev/null 2>&1
         cp pki/crl.pem /etc/openvpn/ 2>/dev/null
     fi
     
+    echo "   [🔄] Reiniciando servicio OpenVPN..."
     /etc/init.d/openvpn restart > /dev/null 2>&1
     sleep 2
     
-    nombre_descriptivo=$(obtener_nombre "$CLIENTE_REAL")
-    echo "✅ CLIENTE '$nombre_descriptivo' REACTIVADO"
-}
-
-# Función para bloquear permanente
-bloquear_permanentemente() {
     echo ""
-    echo "🚫 BLOQUEO PERMANENTE"
-    echo "-------------------"
-    
-    echo "Clientes activos:"
-    activos_encontrados=0
-    
-    # Buscar base de datos
-    INDEX_FILES="/etc/easy-rsa/pki/index.txt /etc/openvpn/easy-rsa/pki/index.txt /etc/easy-rsa/keys/index.txt"
-    INDEX_FILE=""
-    for file in $INDEX_FILES; do
-        if [ -f "$file" ]; then
-            INDEX_FILE="$file"
-            break
-        fi
-    done
-    
-    if [ -n "$INDEX_FILE" ]; then
-        for cliente in $(grep "^V" "$INDEX_FILE" 2>/dev/null | awk -F'/' '{print $NF}' | awk '{print $1}'); do
-            nombre_descriptivo=$(obtener_nombre "$cliente")
-            if [ "$cliente" = "$nombre_descriptivo" ]; then
-                echo "   $cliente"
-            else
-                echo "   $nombre_descriptivo ($cliente)"
-            fi
-            activos_encontrados=1
-        done
-    fi
-    
-    if [ $activos_encontrados -eq 0 ]; then
-        echo "   No hay clientes activos"
-        return
-    fi
-    
+    echo "✅ REACTIVACIÓN COMPLETADA"
+    echo "=========================="
+    echo "👤 Cliente: $nombre_descriptivo"
+    echo "📋 Certificado: $CLIENTE_REAL"
+    echo "🔄 Estado: ACTIVO"
+    echo "🔑 Certificado usado: MISMO certificado original"
     echo ""
-    echo -n "Cliente a bloquear (usar nombre o certificado): "
-    read INPUT_CLIENTE
-    
-    CLIENTE_REAL=""
-    if [ -f "$NOMBRES_FILE" ] && grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
-        CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
-        echo "   🔍 Encontrado: $INPUT_CLIENTE → $CLIENTE_REAL"
-    else
-        CLIENTE_REAL=$INPUT_CLIENTE
-    fi
-    
-    # Buscar certificado en múltiples ubicaciones
-    CERT_FOUND=0
-    for cert_dir in "/etc/easy-rsa/pki/issued" "/etc/openvpn/easy-rsa/pki/issued" "/etc/easy-rsa/keys"; do
-        if [ -f "${cert_dir}/${CLIENTE_REAL}.crt" ]; then
-            CERT_FOUND=1
-            break
-        fi
-    done
-    
-    if [ $CERT_FOUND -eq 0 ]; then
-        echo "❌ Cliente '$INPUT_CLIENTE' no encontrado"
-        return
-    fi
-    
-    echo "   [....] Bloqueando cliente..."
-    
-    # Buscar directorio easy-rsa
-    cd /etc/easy-rsa 2>/dev/null || cd /etc/openvpn/easy-rsa 2>/dev/null
-    if [ $? -eq 0 ]; then
-        echo "yes" | ./easyrsa revoke "$CLIENTE_REAL" > /dev/null 2>&1
-        ./easyrsa gen-crl > /dev/null 2>&1
-        cp pki/crl.pem /etc/openvpn/ 2>/dev/null
-    fi
-    
-    /etc/init.d/openvpn restart > /dev/null 2>&1
-    sleep 2
-    
-    nombre_descriptivo=$(obtener_nombre "$CLIENTE_REAL")
-    echo "✅ CLIENTE '$nombre_descriptivo' BLOQUEADO PERMANENTEMENTE"
+    echo "💡 El cliente puede conectarse inmediatamente"
+    echo "   No se requiere configuración adicional"
 }
 
 # Función para gestionar nombres (CORREGIDA)
@@ -601,7 +596,7 @@ estado_servicio() {
     fi
 }
 
-# Menú principal
+# Menú principal (MODIFICADO - OPCIÓN 5 ELIMINADA)
 while true; do
     mostrar_menu
     read OPCION
@@ -611,10 +606,9 @@ while true; do
         2) listar_clientes ;;
         3) suspender_cliente ;;
         4) reactivar_cliente ;;
-        5) bloquear_permanentemente ;;
-        6) gestionar_nombres ;;
-        7) estado_servicio ;;
-        8)
+        5) gestionar_nombres ;;
+        6) estado_servicio ;;
+        7)
             echo ""
             echo "👋 Saliendo..."
             exit 0
@@ -631,17 +625,22 @@ GESTOR_SCRIPT
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ GESTOR CORREGIDO - PROBLEMAS SOLUCIONADOS"
+echo "✅ GESTOR MODIFICADO CORRECTAMENTE"
 echo ""
-echo "🎯 CORRECCIONES APLICADAS:"
-echo "   🔍 Base de datos: Busca en múltiples ubicaciones posibles"
-echo "   🏷️  Nombres: Función mejorada para mostrar nombres asignados"
-echo "   📊 Listado: Maneja diferentes formatos de base de datos"
-echo "   🔧 Compatibilidad: Funciona con diferentes instalaciones de OpenVPN"
+echo "🎯 CAMBIOS APLICADOS:"
+echo "   ❌ OPCIÓN 5 ELIMINADA: Bloqueo permanente removido del menú"
+echo "   ⏸️  OPCIÓN 3 MEJORADA: Suspensión temporal funciona correctamente"
+echo "   🔄 OPCIÓN 4 MEJORADA: Reactivación usa el MISMO certificado"
+echo "   📊 LISTADO ACTUALIZADO: 'BLOQUEADOS' renombrado a 'REVOCADOS PERMANENTES'"
+echo ""
+echo "🔧 DETALLES TÉCNICOS:"
+echo "   • Suspensión temporal guarda backup para reactivación"
+echo "   • Reactivación restaura certificado original sin generar nuevo"
+echo "   • Menú ahora tiene 7 opciones (1-7) en lugar de 8"
 echo ""
 echo "🚀 EJECUTA: gestor-vpn"
 echo ""
-echo "💡 PRUEBA ESTO:"
-echo "   1. Ve a la opción 6 y asigna nombres a client1, client2, etc."
-echo "   2. Luego usa la opción 1 para ver los nombres en clientes conectados"
-echo "   3. Usa la opción 2 para listar todos los clientes con nombres"
+echo "💡 IMPORTANTE:"
+echo "   • Opción 3 suspende temporalmente (certificado se guarda)"
+echo "   • Opción 4 reactiva con el mismo certificado guardado"
+echo "   • No hay opción de bloqueo permanente en el menú"
