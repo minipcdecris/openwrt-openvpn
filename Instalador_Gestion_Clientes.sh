@@ -1,11 +1,11 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO GESTOR VPN"
-echo "=========================="
+echo "🔧 ACTUALIZANDO GESTOR VPN CON LAS MODIFICACIONES"
+echo "=================================================="
 
 # Actualizar el script
-cat > /usr/bin/gestor-vpn << 'EOF'
+cat > /usr/bin/gestion << 'EOF'
 #!/bin/sh
 
 # Archivos de configuración
@@ -42,8 +42,8 @@ obtener_nombre() {
 mostrar_menu() {
     clear
     echo ""
-    echo "🔧 GESTOR VPN - BLOQUEO POR IP"
-    echo "=============================="
+    echo "🔧 GESTIÓN VPN - BLOQUEO POR IP"
+    echo "================================"
     echo ""
     echo "1) 👁️  Ver clientes conectados (registra IPs)"
     echo "2) 📋 Listar todos los clientes"
@@ -128,7 +128,7 @@ ver_conectados() {
     fi
 }
 
-# Función para listar clientes
+# Función para listar clientes (FILTRANDO SERVER)
 listar_clientes() {
     echo ""
     echo "📋 LISTADO DE CLIENTES"
@@ -162,7 +162,8 @@ listar_clientes() {
             cliente=$(echo "$linea" | awk '{print $NF}')
         fi
         
-        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
+        # FILTRAR: No mostrar "server"
+        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
             activos=$((activos + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
             echo "   $activos) 🟢 $nombre_descriptivo ($cliente)"
@@ -176,10 +177,10 @@ listar_clientes() {
     fi
     
     echo ""
-    echo "Clientes REVOCADOS (🔴):"
+    echo "Clientes BLOQUEADOS (🔴):"
     echo ""
-    revocados=0
-    grep "^R" "$INDEX_FILE" > /tmp/revocados.txt 2>/dev/null
+    bloqueados=0
+    grep "^R" "$INDEX_FILE" > /tmp/bloqueados.txt 2>/dev/null
     
     while read linea; do
         # Extraer el CN (Common Name)
@@ -189,21 +190,22 @@ listar_clientes() {
             cliente=$(echo "$linea" | awk '{print $NF}')
         fi
         
-        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
-            revocados=$((revocados + 1))
+        # FILTRAR: No mostrar "server"
+        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
+            bloqueados=$((bloqueados + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
-            echo "   🔴 $nombre_descriptivo ($cliente)"
+            echo "   $bloqueados) 🔴 $nombre_descriptivo ($cliente)"
         fi
-    done < /tmp/revocados.txt
+    done < /tmp/bloqueados.txt
     
-    rm -f /tmp/revocados.txt
+    rm -f /tmp/bloqueados.txt
     
-    if [ $revocados -eq 0 ]; then
+    if [ $bloqueados -eq 0 ]; then
         echo "   Ninguno"
     fi
     
     echo ""
-    echo "📊 Total: $((activos + revocados)) clientes"
+    echo "📊 Total clientes (excluyendo server): $((activos + bloqueados))"
 }
 
 # Función para obtener IPs de un cliente
@@ -260,7 +262,7 @@ desbloquear_ip() {
     fi
 }
 
-# Función para bloquear cliente
+# Función para bloquear cliente (FILTRANDO SERVER)
 bloquear_cliente() {
     echo ""
     echo "🚫 BLOQUEAR CLIENTE"
@@ -276,7 +278,7 @@ bloquear_cliente() {
         return
     fi
     
-    # Listar clientes activos
+    # Listar clientes activos (EXCLUYENDO SERVER)
     echo "Clientes disponibles para BLOQUEAR:"
     echo ""
     
@@ -294,7 +296,7 @@ bloquear_cliente() {
         return
     fi
     
-    # Crear lista de clientes activos
+    # Crear lista de clientes activos (EXCLUYENDO SERVER)
     grep "^V" "$INDEX_FILE" 2>/dev/null | while read linea; do
         # Extraer el CN
         if echo "$linea" | grep -q "/CN="; then
@@ -303,13 +305,14 @@ bloquear_cliente() {
             cliente=$(echo "$linea" | awk '{print $NF}')
         fi
         
-        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
+        # FILTRAR: No incluir "server"
+        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
             echo "$cliente" >> /tmp/clientes_raw.txt
         fi
     done
     
     if [ ! -f /tmp/clientes_raw.txt ]; then
-        echo "   ℹ️  No hay clientes activos"
+        echo "   ℹ️  No hay clientes disponibles para bloquear"
         return
     fi
     
@@ -576,7 +579,7 @@ gestionar_nombres() {
                     done < /tmp/eliminar_index.txt
                     rm -f /tmp/eliminar_index.txt
                 fi
-                
+    
                 if [ -z "$cliente_eliminar" ]; then
                     echo "❌ Selección inválida"
                     continue
@@ -771,30 +774,36 @@ while true; do
 done
 EOF
 
-# Dar permisos
-chmod +x /usr/bin/gestor-vpn
+# Dar permisos al nuevo comando
+chmod +x /usr/bin/gestion
+
+# También mantener el anterior por compatibilidad (opcional)
+if [ -f "/usr/bin/gestor-vpn" ]; then
+    echo "⚠️  Manteniendo gestor-vpn por compatibilidad"
+    echo "   El nuevo comando es: gestion"
+else
+    # Crear enlace simbólico para mantener compatibilidad
+    ln -sf /usr/bin/gestion /usr/bin/gestor-vpn 2>/dev/null
+fi
 
 echo ""
-echo "✅ GESTOR ACTUALIZADO"
+echo "✅ ACTUALIZACIÓN COMPLETADA"
 echo ""
-echo "🔧 CORRECCIONES APLICADAS:"
-echo "   1. ✅ Los nombres ahora se muestran SIN /CN="
-echo "   2. ✅ Opción 7 para registrar IPs manualmente"
-echo "   3. ✅ Mejores mensajes de ayuda"
-echo "   4. ✅ Validación de nombres limpios"
+echo "🔧 MODIFICACIONES APLICADAS:"
+echo "   1. ✅ Nuevo comando: 'gestion' (en lugar de 'gestor-vpn')"
+echo "   2. ✅ Se filtra 'server' de las listas (opción 2 y 3)"
+echo "   3. ✅ Texto cambiado: 'Clientes BLOQUEADOS' en lugar de 'revocados'"
+echo "   4. ✅ Compatibilidad mantenida: 'gestor-vpn' sigue funcionando"
 echo ""
-echo "🚀 FLUJO RECOMENDADO:"
-echo "   1. Opción 5 → Asigna nombres a client1, client2, etc."
-echo "   2. Opción 7 → Registra IPs manualmente para probar"
-echo "   3. Opción 3 → Bloquea un cliente"
-echo "   4. Opción 6 → Verifica que las IPs estén bloqueadas"
+echo "🚀 PARA USAR EL NUEVO SISTEMA:"
+echo "   gestion"
 echo ""
-echo "💡 EJEMPLO DE REGISTRO MANUAL:"
-echo "   En opción 7, ingresa:"
-echo "   - Cliente: client1  (sin /CN=)"
-echo "   - IP: 192.168.1.100"
+echo "📋 EJEMPLO DE USO:"
+echo "   1. gestion"
+echo "   2. Opción 5 → Asigna nombres a clientes"
+echo "   3. Opción 7 → Registra IPs manualmente"
+echo "   4. Opción 3 → Bloquea un cliente"
+echo "   5. Opción 6 → Verifica estado"
 echo ""
-echo "📝 Para usar con clientes reales:"
-echo "   1. Conecta un cliente VPN"
-echo "   2. Usa opción 1 (registrará IPs automáticamente)"
-echo "   3. Usa opción 3 para bloquearlo"
+echo "💡 NOTA: El servidor (server) ya no aparece en las listas"
+echo "   para evitar bloquearlo accidentalmente."
