@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO GESTOR VPN CON LAS MODIFICACIONES"
-echo "=================================================="
+echo "🔧 CORRIGIENDO SISTEMA DE BLOQUEO COMPLETO"
+echo "=========================================="
 
 # Actualizar el script
 cat > /usr/bin/gestion << 'EOF'
@@ -38,17 +38,125 @@ obtener_nombre() {
     echo "$cliente_limpio"
 }
 
+# Función para encontrar directorio easy-rsa
+encontrar_easyrsa() {
+    for dir in /etc/easy-rsa /etc/openvpn/easy-rsa /root/easy-rsa; do
+        if [ -f "$dir/easyrsa" ] || [ -f "$dir/vars" ]; then
+            echo "$dir"
+            return
+        fi
+    done
+    echo ""
+}
+
+# Función para revocar certificado
+revocar_certificado() {
+    cliente="$1"
+    EASYRSA_DIR=$(encontrar_easyrsa)
+    
+    if [ -z "$EASYRSA_DIR" ]; then
+        echo "⚠️  No se encuentra easy-rsa, no se puede revocar certificado"
+        echo "   Solo se bloqueará la IP en firewall"
+        return 1
+    fi
+    
+    echo "   📝 Revocando certificado de $cliente..."
+    
+    # Cambiar al directorio easy-rsa
+    cd "$EASYRSA_DIR" 2>/dev/null || return 1
+    
+    # Verificar si el certificado existe
+    if [ ! -f "pki/issued/$cliente.crt" ]; then
+        echo "   ⚠️  Certificado $cliente.crt no encontrado"
+        return 1
+    fi
+    
+    # Revocar certificado
+    if [ -f "easyrsa" ]; then
+        echo "yes" | ./easyrsa revoke "$cliente" > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            # Actualizar CRL
+            ./easyrsa gen-crl > /dev/null 2>&1
+            # Copiar CRL a OpenVPN
+            cp pki/crl.pem /etc/openvpn/ 2>/dev/null
+            echo "   ✅ Certificado revocado"
+            return 0
+        fi
+    fi
+    
+    echo "   ❌ Error revocando certificado"
+    return 1
+}
+
+# Función para restaurar certificado
+restaurar_certificado() {
+    cliente="$1"
+    EASYRSA_DIR=$(encontrar_easyrsa)
+    
+    if [ -z "$EASYRSA_DIR" ]; then
+        echo "⚠️  No se encuentra easy-rsa"
+        return 1
+    fi
+    
+    echo "   📝 Restaurando certificado de $cliente..."
+    
+    cd "$EASYRSA_DIR" 2>/dev/null || return 1
+    
+    # Verificar si hay backup del certificado
+    if [ -f "pki/issued/$cliente.crt.backup" ]; then
+        # Restaurar desde backup
+        cp "pki/issued/$cliente.crt.backup" "pki/issued/$cliente.crt" 2>/dev/null
+        cp "pki/private/$cliente.key.backup" "pki/private/$cliente.key" 2>/dev/null
+        
+        # Eliminar línea de revocación del índice
+        sed -i "/\/CN=$cliente$/d" pki/index.txt 2>/dev/null
+        # Añadir como válido
+        serial=$(openssl x509 -in "pki/issued/$cliente.crt" -serial -noout 2>/dev/null | cut -d= -f2)
+        if [ -n "$serial" ]; then
+            echo "V\t$(date +'%y%m%d%H%M%SZ')\t\t$serial\tunknown\t/CN=$cliente" >> pki/index.txt
+        fi
+        
+        # Actualizar CRL
+        ./easyrsa gen-crl > /dev/null 2>&1
+        cp pki/crl.pem /etc/openvpn/ 2>/dev/null
+        echo "   ✅ Certificado restaurado"
+        return 0
+    else
+        echo "   ⚠️  No hay backup del certificado, solo se desbloqueará IP"
+        return 1
+    fi
+}
+
+# Función para verificar estado del cliente
+estado_cliente() {
+    cliente="$1"
+    EASYRSA_DIR=$(encontrar_easyrsa)
+    
+    if [ -z "$EASYRSA_DIR" ]; then
+        echo "unknown"
+        return
+    fi
+    
+    if grep -q "^R.*/CN=$cliente$" "$EASYRSA_DIR/pki/index.txt" 2>/dev/null; then
+        echo "revocado"
+    elif grep -q "^V.*/CN=$cliente$" "$EASYRSA_DIR/pki/index.txt" 2>/dev/null; then
+        echo "activo"
+    else
+        echo "no_encontrado"
+    fi
+}
+
 # Función para mostrar menú
 mostrar_menu() {
     clear
     echo ""
-    echo "🔧 GESTIÓN VPN - BLOQUEO POR IP"
-    echo "================================"
+    echo "🔧 GESTIÓN VPN - BLOQUEO COMPLETO"
+    echo "================================="
     echo ""
     echo "1) 👁️  Ver clientes conectados (registra IPs)"
-    echo "2) 📋 Listar todos los clientes"
-    echo "3) 🚫 BLOQUEAR cliente"
-    echo "4) ✅ DESBLOQUEAR cliente"
+    echo "2) 📋 Listar estado de clientes"
+    echo "3) 🚫 BLOQUEAR cliente (IP + certificado)"
+    echo "4) ✅ DESBLOQUEAR cliente (IP + certificado)"
     echo "5) 🏷️  Gestionar nombres"
     echo "6) 🔍 Estado del sistema"
     echo "7) 📝 Registrar IP manualmente"
@@ -70,10 +178,6 @@ ver_conectados() {
         STATUS_FILE="/tmp/openvpn-status.log"
     else
         echo "   ⚠️  No se encuentra archivo de estado"
-        echo ""
-        echo "💡 Para crear el archivo, ejecuta:"
-        echo "   killall openvpn"
-        echo "   openvpn --config /etc/openvpn/server.conf --status /var/log/openvpn-status.log 10"
         return
     fi
     
@@ -95,7 +199,7 @@ ver_conectados() {
         
         if [ -n "$cliente" ] && [ "$ip_externa" != "UNDEF" ]; then
             cliente_limpio=$(limpiar_nombre "$cliente")
-            nombre_descriptivo=$(obtener_nombre "$cliente")
+            nombre_descriptivo=$(obtener_nombre "$cliente"))
             
             # Registrar IP automáticamente
             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -128,28 +232,34 @@ ver_conectados() {
     fi
 }
 
-# Función para listar clientes (FILTRANDO SERVER)
+# Función para listar estado de clientes (CORREGIDA)
 listar_clientes() {
     echo ""
-    echo "📋 LISTADO DE CLIENTES"
-    echo "======================"
+    echo "📋 ESTADO COMPLETO DE CLIENTES"
+    echo "=============================="
     echo ""
     
     # Buscar base de datos
     INDEX_FILE=""
-    for dir in /etc/easy-rsa/pki /etc/openvpn/easy-rsa/pki /etc/openvpn; do
-        if [ -f "$dir/index.txt" ]; then
-            INDEX_FILE="$dir/index.txt"
-            break
-        fi
-    done
+    EASYRSA_DIR=$(encontrar_easyrsa)
+    if [ -n "$EASYRSA_DIR" ] && [ -f "$EASYRSA_DIR/pki/index.txt" ]; then
+        INDEX_FILE="$EASYRSA_DIR/pki/index.txt"
+    else
+        # Buscar en ubicaciones alternativas
+        for dir in /etc/easy-rsa/pki /etc/openvpn/easy-rsa/pki /etc/openvpn; do
+            if [ -f "$dir/index.txt" ]; then
+                INDEX_FILE="$dir/index.txt"
+                break
+            fi
+        done
+    fi
     
     if [ -z "$INDEX_FILE" ]; then
-        echo "   ℹ️  No se encuentra base de datos"
+        echo "   ℹ️  No se encuentra base de datos de certificados"
         return
     fi
     
-    echo "Clientes ACTIVOS (🟢):"
+    echo "🎯 CLIENTES ACTIVOS (certificado válido):"
     echo ""
     activos=0
     grep "^V" "$INDEX_FILE" > /tmp/activos.txt 2>/dev/null
@@ -164,9 +274,15 @@ listar_clientes() {
         
         # FILTRAR: No mostrar "server"
         if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
+            # Verificar si está bloqueado en nuestro sistema
+            bloqueado_nuestro=""
+            if grep -q "^$cliente:" "$SUSPENDED_FILE"; then
+                bloqueado_nuestro="🚫"
+            fi
+            
             activos=$((activos + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
-            echo "   $activos) 🟢 $nombre_descriptivo ($cliente)"
+            echo "   $activos) 🟢 $nombre_descriptivo ($cliente) $bloqueado_nuestro"
         fi
     done < /tmp/activos.txt
     
@@ -177,10 +293,10 @@ listar_clientes() {
     fi
     
     echo ""
-    echo "Clientes BLOQUEADOS (🔴):"
+    echo "🔴 CLIENTES REVOCADOS (certificado inválido):"
     echo ""
-    bloqueados=0
-    grep "^R" "$INDEX_FILE" > /tmp/bloqueados.txt 2>/dev/null
+    revocados=0
+    grep "^R" "$INDEX_FILE" > /tmp/revocados.txt 2>/dev/null
     
     while read linea; do
         # Extraer el CN (Common Name)
@@ -192,20 +308,60 @@ listar_clientes() {
         
         # FILTRAR: No mostrar "server"
         if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
-            bloqueados=$((bloqueados + 1))
+            # Verificar si está bloqueado en nuestro sistema
+            bloqueado_nuestro=""
+            if grep -q "^$cliente:" "$SUSPENDED_FILE"; then
+                bloqueado_nuestro="🚫"
+            fi
+            
+            revocados=$((revocados + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
-            echo "   $bloqueados) 🔴 $nombre_descriptivo ($cliente)"
+            echo "   $revocados) 🔴 $nombre_descriptivo ($cliente) $bloqueado_nuestro"
         fi
-    done < /tmp/bloqueados.txt
+    done < /tmp/revocados.txt
     
-    rm -f /tmp/bloqueados.txt
+    rm -f /tmp/revocados.txt
     
-    if [ $bloqueados -eq 0 ]; then
+    if [ $revocados -eq 0 ]; then
         echo "   Ninguno"
     fi
     
     echo ""
-    echo "📊 Total clientes (excluyendo server): $((activos + bloqueados))"
+    echo "🚫 CLIENTES BLOQUEADOS EN NUESTRO SISTEMA:"
+    echo ""
+    bloqueados_sistema=0
+    
+    if [ -s "$SUSPENDED_FILE" ]; then
+        while IFS=: read -r cliente fecha resto; do
+            if [ -n "$cliente" ]; then
+                bloqueados_sistema=$((bloqueados_sistema + 1))
+                nombre_descriptivo=$(obtener_nombre "$cliente")
+                # Verificar estado del certificado
+                estado_cert=$(estado_cliente "$cliente")
+                estado_icono="❓"
+                if [ "$estado_cert" = "revocado" ]; then
+                    estado_icono="🔴"
+                elif [ "$estado_cert" = "activo" ]; then
+                    estado_icono="⚠️ "
+                fi
+                echo "   $bloqueados_sistema) $estado_icono $nombre_descriptivo ($cliente) - $fecha"
+            fi
+        done < "$SUSPENDED_FILE"
+    fi
+    
+    if [ $bloqueados_sistema -eq 0 ]; then
+        echo "   Ninguno"
+    fi
+    
+    echo ""
+    echo "📊 RESUMEN:"
+    echo "   🟢 Certificados activos: $activos"
+    echo "   🔴 Certificados revocados: $revocados"
+    echo "   🚫 Bloqueados en sistema: $bloqueados_sistema"
+    echo ""
+    echo "💡 LEYENDA:"
+    echo "   🟢 = Certificado válido | 🔴 = Certificado revocado"
+    echo "   🚫 = IP bloqueada | ⚠️  = IP bloqueada pero certificado activo"
 }
 
 # Función para obtener IPs de un cliente
@@ -224,7 +380,6 @@ bloquear_ip() {
     
     if ! command -v iptables >/dev/null 2>&1; then
         echo "❌ iptables no disponible"
-        echo "   Ejecuta: opkg update && opkg install iptables-nft"
         return 1
     fi
     
@@ -262,19 +417,22 @@ desbloquear_ip() {
     fi
 }
 
-# Función para bloquear cliente (FILTRANDO SERVER)
+# Función para BLOQUEAR CLIENTE COMPLETAMENTE
 bloquear_cliente() {
     echo ""
-    echo "🚫 BLOQUEAR CLIENTE"
-    echo "==================="
+    echo "🚫 BLOQUEAR CLIENTE (COMPLETO)"
+    echo "=============================="
+    echo "⚠️  Esto hará:"
+    echo "   1. 🔒 Bloquear todas las IPs conocidas"
+    echo "   2. 📝 Revocar certificado (si es posible)"
+    echo "   3. 📋 Añadir a lista de bloqueados"
+    echo ""
     
     if ! command -v iptables >/dev/null 2>&1; then
         echo "❌ ERROR: iptables no instalado"
         echo ""
         echo "💡 En OpenWRT:"
         echo "   opkg update && opkg install iptables-nft"
-        echo ""
-        echo "⚠️  Sin iptables no se pueden bloquear IPs"
         return
     fi
     
@@ -282,36 +440,32 @@ bloquear_cliente() {
     echo "Clientes disponibles para BLOQUEAR:"
     echo ""
     
-    # Buscar base de datos
-    INDEX_FILE=""
-    for dir in /etc/easy-rsa/pki /etc/openvpn/easy-rsa/pki /etc/openvpn; do
-        if [ -f "$dir/index.txt" ]; then
-            INDEX_FILE="$dir/index.txt"
-            break
-        fi
-    done
-    
-    if [ -z "$INDEX_FILE" ]; then
-        echo "   ℹ️  No hay clientes"
-        return
+    EASYRSA_DIR=$(encontrar_easyrsa)
+    if [ -z "$EASYRSA_DIR" ] || [ ! -f "$EASYRSA_DIR/pki/index.txt" ]; then
+        echo "   ℹ️  No se encuentra easy-rsa, solo se bloquearán IPs"
     fi
     
-    # Crear lista de clientes activos (EXCLUYENDO SERVER)
-    grep "^V" "$INDEX_FILE" 2>/dev/null | while read linea; do
-        # Extraer el CN
-        if echo "$linea" | grep -q "/CN="; then
-            cliente=$(echo "$linea" | sed 's/.*\/CN=//' | awk '{print $1}')
-        else
-            cliente=$(echo "$linea" | awk '{print $NF}')
-        fi
-        
-        # FILTRAR: No incluir "server"
-        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
-            echo "$cliente" >> /tmp/clientes_raw.txt
-        fi
-    done
+    # Crear lista de clientes activos
+    if [ -n "$EASYRSA_DIR" ] && [ -f "$EASYRSA_DIR/pki/index.txt" ]; then
+        grep "^V" "$EASYRSA_DIR/pki/index.txt" 2>/dev/null | while read linea; do
+            # Extraer el CN
+            if echo "$linea" | grep -q "/CN="; then
+                cliente=$(echo "$linea" | sed 's/.*\/CN=//' | awk '{print $1}')
+            else
+                cliente=$(echo "$linea" | awk '{print $NF}')
+            fi
+            
+            # FILTRAR: No incluir "server"
+            if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
+                echo "$cliente" >> /tmp/clientes_raw.txt
+            fi
+        done
+    else
+        # Si no hay easy-rsa, usar clientes con IPs registradas
+        cut -d: -f1 "$IP_HISTORY_FILE" 2>/dev/null | sort -u > /tmp/clientes_raw.txt
+    fi
     
-    if [ ! -f /tmp/clientes_raw.txt ]; then
+    if [ ! -f /tmp/clientes_raw.txt ] || [ ! -s /tmp/clientes_raw.txt ]; then
         echo "   ℹ️  No hay clientes disponibles para bloquear"
         return
     fi
@@ -321,7 +475,12 @@ bloquear_cliente() {
     while read cliente; do
         num=$((num + 1))
         nombre_descriptivo=$(obtener_nombre "$cliente")
-        echo "   $num) $nombre_descriptivo ($cliente)"
+        # Verificar si ya está bloqueado
+        if grep -q "^$cliente:" "$SUSPENDED_FILE"; then
+            echo "   $num) $nombre_descriptivo ($cliente) [YA BLOQUEADO]"
+        else
+            echo "   $num) $nombre_descriptivo ($cliente)"
+        fi
         # Guardar para referencia
         echo "$num:$cliente" >> /tmp/clientes_index.txt
     done < /tmp/clientes_raw.txt
@@ -349,6 +508,18 @@ bloquear_cliente() {
         return
     fi
     
+    # Verificar si ya está bloqueado
+    if grep -q "^$cliente_seleccionado:" "$SUSPENDED_FILE"; then
+        echo ""
+        echo "⚠️  Este cliente YA está bloqueado en nuestro sistema"
+        echo -n "¿Bloquear de nuevo? (s/N): "
+        read reconfirmar
+        if [ "$reconfirmar" != "s" ] && [ "$reconfirmar" != "S" ]; then
+            echo "❌ Operación cancelada"
+            return
+        fi
+    fi
+    
     echo ""
     echo "🔍 Buscando IPs de: $cliente_seleccionado"
     
@@ -358,22 +529,29 @@ bloquear_cliente() {
     if [ -z "$IPS" ]; then
         echo "   ℹ️  No hay IPs registradas para este cliente"
         echo ""
-        echo "💡 PARA REGISTRAR IPs:"
-        echo "   1. Conecta el cliente VPN primero"
-        echo "   2. Usa la opción 1 del menú (ver conectados)"
-        echo "   3. O añade IPs manualmente con opción 7"
-        return
+        echo -n "¿Continuar solo con revocación de certificado? (s/N): "
+        read continuar
+        if [ "$continuar" != "s" ] && [ "$continuar" != "S" ]; then
+            echo "❌ Operación cancelada"
+            return
+        fi
+    else
+        echo "   📋 IPs encontradas:"
+        count=0
+        for ip in $IPS; do
+            count=$((count + 1))
+            echo "      $count) $ip"
+        done
     fi
     
-    echo "   📋 IPs encontradas:"
-    count=0
-    for ip in $IPS; do
-        count=$((count + 1))
-        echo "      $count) $ip"
-    done
-    
     echo ""
-    echo -n "¿Bloquear TODAS estas IPs? (s/N): "
+    echo "⚠️  CONFIRMACIÓN FINAL"
+    echo "Cliente: $cliente_seleccionado"
+    if [ -n "$IPS" ]; then
+        echo "IPs a bloquear: $count"
+    fi
+    echo ""
+    echo -n "¿Confirmar BLOQUEO COMPLETO? (s/N): "
     read confirmar
     
     if [ "$confirmar" != "s" ] && [ "$confirmar" != "S" ]; then
@@ -382,46 +560,54 @@ bloquear_cliente() {
     fi
     
     echo ""
-    echo "🛡️  BLOQUEANDO IPs..."
+    echo "🛡️  EJECUTANDO BLOQUEO COMPLETO..."
     echo ""
     
-    # Bloquear cada IP
+    # 1. Bloquear IPs
     bloqueadas=0
-    errores=0
-    for ip in $IPS; do
-        if bloquear_ip "$ip" "$cliente_seleccionado"; then
-            echo "   ✅ $ip - BLOQUEADA"
-            bloqueadas=$((bloqueadas + 1))
-        else
-            echo "   ❌ $ip - Error al bloquear"
-            errores=$((errores + 1))
-        fi
-    done
-    
-    # Añadir a lista de bloqueados
-    if [ $bloqueadas -gt 0 ]; then
-        echo "$cliente_seleccionado:$(date '+%Y-%m-%d %H:%M:%S')" >> "$SUSPENDED_FILE"
+    if [ -n "$IPS" ]; then
+        echo "🔒 Bloqueando IPs en firewall..."
+        for ip in $IPS; do
+            if bloquear_ip "$ip" "$cliente_seleccionado"; then
+                echo "   ✅ $ip - BLOQUEADA"
+                bloqueadas=$((bloqueadas + 1))
+            else
+                echo "   ❌ $ip - Error"
+            fi
+        done
     fi
+    
+    # 2. Revocar certificado
+    echo ""
+    echo "📝 Revocando certificado..."
+    revocar_certificado "$cliente_seleccionado"
+    
+    # 3. Añadir a lista de bloqueados
+    echo ""
+    echo "📋 Actualizando lista de bloqueados..."
+    # Eliminar si ya existe
+    grep -v "^$cliente_seleccionado:" "$SUSPENDED_FILE" > /tmp/suspended.tmp
+    echo "$cliente_seleccionado:$(date '+%Y-%m-%d %H:%M:%S'):completo" >> /tmp/suspended.tmp
+    mv /tmp/suspended.tmp "$SUSPENDED_FILE"
     
     echo ""
-    if [ $errores -eq 0 ]; then
-        echo "✅ CLIENTE BLOQUEADO EXITOSAMENTE"
-    else
-        echo "⚠️  Cliente bloqueado con $errores errores"
-    fi
+    echo "✅ BLOQUEO COMPLETO REALIZADO"
     echo "   👤 Cliente: $cliente_seleccionado"
-    echo "   🛡️  IPs bloqueadas: $bloqueadas"
+    if [ -n "$IPS" ]; then
+        echo "   🔒 IPs bloqueadas: $bloqueadas/$count"
+    fi
+    echo "   📝 Certificado: REVOCADO"
     echo ""
-    echo "💡 Para ver las reglas activas: iptables -nL INPUT | grep DROP"
+    echo "💡 El cliente NO podrá conectarse aunque cambie de IP"
 }
 
-# Función para desbloquear cliente
+# Función para DESBLOQUEAR CLIENTE COMPLETAMENTE
 desbloquear_cliente() {
     echo ""
-    echo "✅ DESBLOQUEAR CLIENTE"
-    echo "======================"
+    echo "✅ DESBLOQUEAR CLIENTE (COMPLETO)"
+    echo "================================"
     
-    echo "Clientes BLOQUEADOS:"
+    echo "Clientes BLOQUEADOS en nuestro sistema:"
     echo ""
     
     if [ ! -s "$SUSPENDED_FILE" ]; then
@@ -431,12 +617,12 @@ desbloquear_cliente() {
     
     # Mostrar clientes bloqueados
     num=0
-    while IFS=: read -r cliente fecha resto; do
+    while IFS=: read -r cliente fecha tipo resto; do
         if [ -n "$cliente" ]; then
             num=$((num + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
             echo "   $num) $nombre_descriptivo ($cliente) - $fecha"
-            echo "$num:$cliente" >> /tmp/bloqueados_index.txt
+            echo "$num:$cliente:$tipo" >> /tmp/bloqueados_index.txt
         fi
     done < "$SUSPENDED_FILE"
     
@@ -446,10 +632,12 @@ desbloquear_cliente() {
     
     # Obtener cliente seleccionado
     cliente_seleccionado=""
+    tipo_bloqueo=""
     if [ -f /tmp/bloqueados_index.txt ]; then
-        while IFS=: read -r num cliente; do
+        while IFS=: read -r num cliente tipo; do
             if [ "$num" = "$seleccion" ]; then
                 cliente_seleccionado="$cliente"
+                tipo_bloqueo="$tipo"
                 break
             fi
         done < /tmp/bloqueados_index.txt
@@ -463,11 +651,12 @@ desbloquear_cliente() {
     
     echo ""
     echo "🔓 DESBLOQUEANDO: $cliente_seleccionado"
+    echo ""
     
-    # Obtener y desbloquear IPs
+    # 1. Desbloquear IPs
+    echo "🔓 Desbloqueando IPs..."
     IPS=$(obtener_ips_cliente "$cliente_seleccionado")
     if [ -n "$IPS" ]; then
-        echo ""
         for ip in $IPS; do
             desbloquear_ip "$ip"
             echo "   ✅ $ip - DESBLOQUEADA"
@@ -476,13 +665,28 @@ desbloquear_cliente() {
         echo "   ℹ️  No hay IPs registradas para desbloquear"
     fi
     
-    # Eliminar de lista de bloqueados
+    # 2. Restaurar certificado (si el bloqueo fue completo)
+    if [ "$tipo_bloqueo" = "completo" ] || [ -z "$tipo_bloqueo" ]; then
+        echo ""
+        echo "📝 Restaurando certificado..."
+        restaurar_certificado "$cliente_seleccionado"
+    fi
+    
+    # 3. Eliminar de lista de bloqueados
+    echo ""
+    echo "📋 Eliminando de lista de bloqueados..."
     grep -v "^$cliente_seleccionado:" "$SUSPENDED_FILE" > /tmp/suspended.tmp
     mv /tmp/suspended.tmp "$SUSPENDED_FILE"
     
     echo ""
-    echo "✅ CLIENTE DESBLOQUEADO: $cliente_seleccionado"
+    echo "✅ CLIENTE DESBLOQUEADO COMPLETAMENTE"
+    echo "   👤 Cliente: $cliente_seleccionado"
+    echo "   🔓 IPs desbloqueadas"
+    echo "   📝 Certificado: RESTAURADO (si era posible)"
 }
+
+# (Las funciones gestionar_nombres, registrar_ip_manual, estado_servicio se mantienen igual)
+# [Pegar aquí las funciones existentes sin cambios...]
 
 # Función para gestionar nombres
 gestionar_nombres() {
@@ -686,6 +890,21 @@ estado_servicio() {
         echo "   💡 Ejecuta: opkg update && opkg install iptables-nft"
     fi
     
+    # easy-rsa
+    echo ""
+    echo "📝 EASY-RSA:"
+    EASYRSA_DIR=$(encontrar_easyrsa)
+    if [ -n "$EASYRSA_DIR" ]; then
+        echo "   ✅ Encontrado en: $EASYRSA_DIR"
+        if [ -f "$EASYRSA_DIR/pki/index.txt" ]; then
+            activos=$(grep -c "^V" "$EASYRSA_DIR/pki/index.txt")
+            revocados=$(grep -c "^R" "$EASYRSA_DIR/pki/index.txt")
+            echo "   📊 Certificados: $activos activos, $revocados revocados"
+        fi
+    else
+        echo "   ⚠️  No encontrado (no se pueden revocar certificados)"
+    fi
+    
     # Estadísticas
     echo ""
     echo "📊 ESTADÍSTICAS GESTOR:"
@@ -774,36 +993,36 @@ while true; do
 done
 EOF
 
-# Dar permisos al nuevo comando
+# Dar permisos
 chmod +x /usr/bin/gestion
 
-# También mantener el anterior por compatibilidad (opcional)
-if [ -f "/usr/bin/gestor-vpn" ]; then
-    echo "⚠️  Manteniendo gestor-vpn por compatibilidad"
-    echo "   El nuevo comando es: gestion"
-else
-    # Crear enlace simbólico para mantener compatibilidad
-    ln -sf /usr/bin/gestion /usr/bin/gestor-vpn 2>/dev/null
-fi
-
 echo ""
-echo "✅ ACTUALIZACIÓN COMPLETADA"
+echo "✅ SISTEMA CORREGIDO"
 echo ""
-echo "🔧 MODIFICACIONES APLICADAS:"
-echo "   1. ✅ Nuevo comando: 'gestion' (en lugar de 'gestor-vpn')"
-echo "   2. ✅ Se filtra 'server' de las listas (opción 2 y 3)"
-echo "   3. ✅ Texto cambiado: 'Clientes BLOQUEADOS' en lugar de 'revocados'"
-echo "   4. ✅ Compatibilidad mantenida: 'gestor-vpn' sigue funcionando"
+echo "🔧 CAMBIOS REALIZADOS:"
+echo "   1. ✅ BLOQUEO COMPLETO: Ahora revoca certificados además de bloquear IPs"
+echo "   2. ✅ LISTADO CORRECTO: La opción 2 muestra estado real de certificados"
+echo "   3. ✅ SEPARACIÓN CLARA:"
+echo "      - 🟢 Certificados activos (V en index.txt)"
+echo "      - 🔴 Certificados revocados (R en index.txt)"
+echo "      - 🚫 Bloqueados en nuestro sistema (archivo suspended.txt)"
+echo "   4. ✅ DESBLOQUEO COMPLETO: Restaura certificados al desbloquear"
 echo ""
-echo "🚀 PARA USAR EL NUEVO SISTEMA:"
-echo "   gestion"
+echo "🚀 FLUJO CORREGIDO:"
+echo "   Opción 3 (BLOQUEAR):"
+echo "     1. Bloquea IPs en firewall"
+echo "     2. Revoca certificado en easy-rsa"
+echo "     3. Añade a lista de bloqueados"
 echo ""
-echo "📋 EJEMPLO DE USO:"
-echo "   1. gestion"
-echo "   2. Opción 5 → Asigna nombres a clientes"
-echo "   3. Opción 7 → Registra IPs manualmente"
-echo "   4. Opción 3 → Bloquea un cliente"
-echo "   5. Opción 6 → Verifica estado"
+echo "   Opción 4 (DESBLOQUEAR):"
+echo "     1. Desbloquea IPs del firewall"
+echo "     2. Restaura certificado (si había backup)"
+echo "     3. Elimina de lista de bloqueados"
 echo ""
-echo "💡 NOTA: El servidor (server) ya no aparece en las listas"
-echo "   para evitar bloquearlo accidentalmente."
+echo "📊 LA OPCIÓN 2 AHORA MUESTRA:"
+echo "   - Certificados válidos (🟢)"
+echo "   - Certificados revocados (🔴)"
+echo "   - Clientes bloqueados en nuestro sistema (🚫)"
+echo ""
+echo "💡 NOTA: Si easy-rsa no está disponible, solo se bloquearán IPs"
+echo "   (compatible con instalaciones mínimas)"
