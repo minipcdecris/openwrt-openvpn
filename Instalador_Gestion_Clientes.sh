@@ -1,9 +1,13 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 IMPLEMENTANDO BLOQUEO POR IP/FIREWALL EN OPENWRT"
-echo "=================================================="
+echo "🔧 CREANDO GESTOR VPN COMPATIBLE CON OPENWRT"
+echo "============================================"
 
+# Crear directorios necesarios
+mkdir -p /etc/openvpn/clientes/
+
+# Crear script principal CORREGIDO
 cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
 #!/bin/sh
 
@@ -12,30 +16,37 @@ NOMBRES_FILE="/etc/openvpn/clientes/nombres.txt"
 IP_HISTORY_FILE="/etc/openvpn/clientes/ip_history.txt"
 SUSPENDED_FILE="/etc/openvpn/clientes/suspended.txt"
 
-# Asegurar que los archivos existen
-mkdir -p /etc/openvpn/clientes/
-touch "$NOMBRES_FILE"
-touch "$IP_HISTORY_FILE"
-touch "$SUSPENDED_FILE"
+# Crear archivos si no existen
+for file in "$NOMBRES_FILE" "$IP_HISTORY_FILE" "$SUSPENDED_FILE"; do
+    [ ! -f "$file" ] && touch "$file"
+done
 
 # Función para obtener nombre descriptivo
 obtener_nombre() {
-    local cliente=$1
-    local nombre=$(grep "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2-)
-    echo "${nombre:-$cliente}"
+    local cliente="$1"
+    if [ -f "$NOMBRES_FILE" ]; then
+        local nombre=$(grep "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2-)
+        if [ -n "$nombre" ]; then
+            echo "$nombre"
+        else
+            echo "$cliente"
+        fi
+    else
+        echo "$cliente"
+    fi
 }
 
 # Función para registrar IP de cliente
 registrar_ip() {
-    local cliente=$1
-    local ip=$2
+    local cliente="$1"
+    local ip="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Solo registrar si es una IP válida
-    if echo "$ip" | grep -q '^[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}$'; then
-        # Eliminar entradas antiguas del mismo cliente+IP
-        grep -v "^${cliente}:${ip}:" "$IP_HISTORY_FILE" 2>/dev/null > "${IP_HISTORY_FILE}.tmp"
-        mv "${IP_HISTORY_FILE}.tmp" "$IP_HISTORY_FILE"
+    # Validar IP simple
+    if echo "$ip" | grep -q '^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$'; then
+        # Crear archivo temporal
+        grep -v "^${cliente}:${ip}:" "$IP_HISTORY_FILE" 2>/dev/null > /tmp/ip_history.tmp
+        mv /tmp/ip_history.tmp "$IP_HISTORY_FILE" 2>/dev/null
         
         # Añadir nueva entrada
         echo "${cliente}:${ip}:${timestamp}" >> "$IP_HISTORY_FILE"
@@ -44,32 +55,38 @@ registrar_ip() {
 
 # Función para obtener todas las IPs de un cliente
 obtener_ips_cliente() {
-    local cliente=$1
-    grep "^${cliente}:" "$IP_HISTORY_FILE" 2>/dev/null | cut -d: -f2 | sort -u
+    local cliente="$1"
+    if [ -f "$IP_HISTORY_FILE" ]; then
+        grep "^${cliente}:" "$IP_HISTORY_FILE" 2>/dev/null | cut -d: -f2 | sort -u
+    fi
 }
 
-# Función para bloquear IP en firewall (compatible con OpenWRT)
+# Función para bloquear IP en firewall
 bloquear_ip_firewall() {
-    local ip=$1
-    local cliente=$2
+    local ip="$1"
+    local cliente="$2"
     
-    # Verificar si iptables existe
+    # Verificar iptables
     if ! command -v iptables >/dev/null 2>&1; then
-        echo "❌ ERROR: iptables no disponible"
+        echo "❌ iptables no disponible"
         return 1
     fi
     
     # Verificar si ya está bloqueada
-    if iptables -nL INPUT 2>/dev/null | grep -q "$ip" && iptables -nL INPUT | grep -q "DROP.*$ip"; then
+    if iptables -nL INPUT 2>/dev/null | grep -q "DROP.*$ip"; then
         return 0
     fi
     
-    # Bloquear IP en iptables
+    # Bloquear IP
     if iptables -I INPUT -s "$ip" -j DROP 2>/dev/null; then
-        # Guardar regla para persistencia
-        mkdir -p /etc/openvpn/
-        if ! grep -q "$ip" /etc/openvpn/blocked_ips.txt 2>/dev/null; then
-            echo "$ip:$cliente:$(date '+%Y-%m-%d %H:%M:%S')" >> /etc/openvpn/blocked_ips.txt
+        # Guardar para persistencia
+        mkdir -p /etc/openvpn
+        if [ -f "/etc/openvpn/blocked_ips.txt" ]; then
+            if ! grep -q "^$ip:" /etc/openvpn/blocked_ips.txt; then
+                echo "$ip:$cliente:$(date '+%Y-%m-%d %H:%M:%S')" >> /etc/openvpn/blocked_ips.txt
+            fi
+        else
+            echo "$ip:$cliente:$(date '+%Y-%m-%d %H:%M:%S')" > /etc/openvpn/blocked_ips.txt
         fi
         return 0
     else
@@ -79,20 +96,16 @@ bloquear_ip_firewall() {
 
 # Función para desbloquear IP en firewall
 desbloquear_ip_firewall() {
-    local ip=$1
+    local ip="$1"
     
-    # Verificar si iptables existe
-    if ! command -v iptables >/dev/null 2>&1; then
-        return 1
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -D INPUT -s "$ip" -j DROP 2>/dev/null
     fi
-    
-    # Eliminar regla de iptables
-    iptables -D INPUT -s "$ip" -j DROP 2>/dev/null 2>&1
     
     # Eliminar de persistencia
     if [ -f "/etc/openvpn/blocked_ips.txt" ]; then
-        grep -v "^$ip:" /etc/openvpn/blocked_ips.txt 2>/dev/null > /tmp/blocked_ips.tmp
-        mv /tmp/blocked_ips.tmp /etc/openvpn/blocked_ips.txt 2>/dev/null
+        grep -v "^$ip:" /etc/openvpn/blocked_ips.txt > /tmp/blocked.tmp
+        mv /tmp/blocked.tmp /etc/openvpn/blocked_ips.txt 2>/dev/null
     fi
 }
 
@@ -105,74 +118,78 @@ mostrar_menu() {
     echo ""
     echo "1) 👁️  Ver clientes conectados"
     echo "2) 📋 Listar todos los clientes"
-    echo "3) 🚫 BLOQUEAR cliente (bloquear IPs)"
-    echo "4) ✅ DESBLOQUEAR cliente (desbloquear IPs)"
-    echo "5) 🛡️  BLOQUEO PROFUNDO"
-    echo "6) 🏷️  GESTIONAR NOMBRES"
-    echo "7) 🔍 Estado del sistema"
-    echo "8) ❌ Salir"
+    echo "3) 🚫 BLOQUEAR cliente"
+    echo "4) ✅ DESBLOQUEAR cliente"
+    echo "5) 🏷️  Gestionar nombres"
+    echo "6) 🔍 Estado del sistema"
+    echo "7) ❌ Salir"
     echo ""
-    echo -n "Selecciona [1-8]: "
+    echo -n "Selecciona [1-7]: "
 }
 
-# Función para ver clientes conectados y registrar IPs (COMPATIBLE CON ASH)
+# Función para ver clientes conectados (COMPATIBLE ASH)
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
+    echo ""
     
     # Buscar archivo de estado
     STATUS_FILE=""
-    for file in "/var/log/openvpn-status.log" "/tmp/openvpn-status.log"; do
-        if [ -f "$file" ] && grep -q "CLIENT_LIST" "$file"; then
-            STATUS_FILE="$file"
-            break
-        fi
-    done
+    if [ -f "/var/log/openvpn-status.log" ] && grep -q "CLIENT_LIST" "/var/log/openvpn-status.log"; then
+        STATUS_FILE="/var/log/openvpn-status.log"
+    elif [ -f "/tmp/openvpn-status.log" ] && grep -q "CLIENT_LIST" "/tmp/openvpn-status.log"; then
+        STATUS_FILE="/tmp/openvpn-status.log"
+    fi
     
     if [ -n "$STATUS_FILE" ]; then
-        # Método compatible con ash (sin process substitution)
-        grep "^CLIENT_LIST" "$STATUS_FILE" | while read line; do
-            # Procesar línea manualmente
-            cliente=$(echo "$line" | awk '{print $2}')
-            ip_externa=$(echo "$line" | awk '{print $3}')
-            ip_interna=$(echo "$line" | awk '{print $4}')
-            
-            cliente=$(echo "$cliente" | xargs)
-            ip_externa=$(echo "$ip_externa" | xargs)
-            
-            if [ -n "$cliente" ] && [ -n "$ip_externa" ] && [ "$ip_externa" != "UNDEF" ]; then
-                nombre_descriptivo=$(obtener_nombre "$cliente")
+        # Usar método compatible con ash
+        grep "^CLIENT_LIST" "$STATUS_FILE" | {
+            found=0
+            while read line; do
+                # Extraer datos usando awk
+                cliente=$(echo "$line" | awk '{print $2}')
+                ip_externa=$(echo "$line" | awk '{print $3}')
+                ip_interna=$(echo "$line" | awk '{print $4}')
                 
-                # Registrar IP automáticamente
-                registrar_ip "$cliente" "$ip_externa"
-                
-                if [ "$cliente" = "$nombre_descriptivo" ]; then
-                    echo "   👤 $cliente"
-                else
-                    echo "   👤 $nombre_descriptivo ($cliente)"
+                if [ -n "$cliente" ] && [ "$ip_externa" != "UNDEF" ]; then
+                    found=1
+                    nombre_descriptivo=$(obtener_nombre "$cliente")
+                    
+                    # Registrar IP
+                    registrar_ip "$cliente" "$ip_externa"
+                    
+                    if [ "$cliente" = "$nombre_descriptivo" ]; then
+                        echo "   👤 $cliente"
+                    else
+                        echo "   👤 $nombre_descriptivo ($cliente)"
+                    fi
+                    echo "      📍 IP Externa: $ip_externa"
+                    [ -n "$ip_interna" ] && echo "      📍 IP Interna: $ip_interna"
+                    echo ""
                 fi
-                echo "      📍 IP Externa: $ip_externa"
-                echo "      📍 IP Interna: $ip_interna"
-                echo ""
+            done
+            if [ $found -eq 0 ]; then
+                echo "   ℹ️  No hay clientes conectados en el log"
             fi
-        done
+        }
     else
-        echo "   ℹ️  No hay clientes conectados"
+        echo "   ℹ️  Archivo de estado no encontrado"
         echo ""
-        echo "💡 El archivo de estado no se encuentra."
-        echo "   Asegúrate de que OpenVPN esté configurado para generarlo."
+        echo "💡 Para habilitar el log, añade a OpenVPN:"
+        echo "   status /var/log/openvpn-status.log"
     fi
 }
 
-# Función para listar clientes (COMPATIBLE CON ASH)
+# Función para listar clientes (COMPATIBLE ASH)
 listar_clientes() {
     echo ""
     echo "📋 LISTADO DE CLIENTES"
     echo "======================"
+    echo ""
     
-    # Buscar archivo index.txt
+    # Buscar base de datos
     INDEX_FILE=""
-    for dir in "/etc/easy-rsa/pki" "/etc/openvpn/easy-rsa/pki" "/etc/openvpn" "/root/easy-rsa/pki"; do
+    for dir in /etc/easy-rsa/pki /etc/openvpn/easy-rsa/pki /etc/openvpn /root/easy-rsa/pki; do
         if [ -f "$dir/index.txt" ]; then
             INDEX_FILE="$dir/index.txt"
             break
@@ -180,189 +197,174 @@ listar_clientes() {
     done
     
     if [ -z "$INDEX_FILE" ]; then
-        echo "ℹ️  No se encuentra la base de datos de certificados"
+        echo "   ℹ️  No se encuentra index.txt"
+        echo ""
+        echo "💡 Ubicaciones probables:"
+        echo "   /etc/easy-rsa/pki/index.txt"
+        echo "   /etc/openvpn/easy-rsa/pki/index.txt"
         return
     fi
     
-    echo "Clientes en sistema:"
+    echo "Clientes ACTIVOS (🟢):"
     echo ""
-    count=0
-    
-    # Método compatible con ash
-    grep -E "^(V|R)" "$INDEX_FILE" 2>/dev/null | while read line; do
-        cliente=$(echo "$line" | awk '{print $NF}')
-        if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
-            count=$((count + 1))
-            nombre_descriptivo=$(obtener_nombre "$cliente")
-            
-            # Verificar estado
-            estado="🟢"
-            if echo "$line" | grep -q "^R"; then
-                estado="🔴"
-            fi
-            
-            if [ "$cliente" = "$nombre_descriptivo" ]; then
-                echo "   $estado $cliente"
-            else
-                echo "   $estado $nombre_descriptivo ($cliente)"
-            fi
-        fi
-    done
+    activos=0
+    if [ -f "$INDEX_FILE" ]; then
+        grep "^V" "$INDEX_FILE" | {
+            while read line; do
+                cliente=$(echo "$line" | awk '{print $NF}')
+                if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
+                    activos=$((activos + 1))
+                    nombre_descriptivo=$(obtener_nombre "$cliente")
+                    echo "   🟢 $nombre_descriptivo ($cliente)"
+                fi
+            done
+        }
+    fi
+    [ $activos -eq 0 ] && echo "   Ninguno"
     
     echo ""
-    echo "📊 Total: $count clientes"
+    echo "Clientes REVOCADOS (🔴):"
+    echo ""
+    revocados=0
+    if [ -f "$INDEX_FILE" ]; then
+        grep "^R" "$INDEX_FILE" | {
+            while read line; do
+                cliente=$(echo "$line" | awk '{print $NF}')
+                if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
+                    revocados=$((revocados + 1))
+                    nombre_descriptivo=$(obtener_nombre "$cliente")
+                    echo "   🔴 $nombre_descriptivo ($cliente)"
+                fi
+            done
+        }
+    fi
+    [ $revocados -eq 0 ] && echo "   Ninguno"
+    
+    echo ""
+    echo "📊 Total: $((activos + revocados)) clientes"
 }
 
 # Función para BLOQUEAR cliente
 bloquear_cliente() {
     echo ""
-    echo "🚫 BLOQUEAR CLIENTE (POR IP)"
-    echo "============================"
+    echo "🚫 BLOQUEAR CLIENTE"
+    echo "==================="
     
     # Verificar iptables
     if ! command -v iptables >/dev/null 2>&1; then
-        echo "❌ ERROR: iptables no está instalado"
+        echo "❌ ERROR: iptables no instalado"
         echo ""
-        echo "💡 Instala con: opkg update && opkg install iptables-nft"
+        echo "💡 En OpenWRT: opkg install iptables-nft"
         return
     fi
     
-    echo "Clientes disponibles para bloquear:"
-    disponibles_encontrados=0
+    echo "Clientes disponibles:"
+    echo ""
     
-    # Buscar clientes en archivos de configuración
-    for cliente_file in /etc/openvpn/client*.conf 2>/dev/null; do
-        if [ -f "$cliente_file" ]; then
-            cliente=$(basename "$cliente_file" .conf)
-            if [ "$cliente" != "*" ]; then
-                nombre_descriptivo=$(obtener_nombre "$cliente")
-                echo "   $nombre_descriptivo ($cliente)"
-                disponibles_encontrados=1
-            fi
-        fi
+    # Listar clientes activos
+    activos=0
+    INDEX_FILE=""
+    for dir in /etc/easy-rsa/pki /etc/openvpn/easy-rsa/pki /etc/openvpn; do
+        [ -f "$dir/index.txt" ] && INDEX_FILE="$dir/index.txt" && break
     done
     
-    # Si no hay archivos .conf, buscar en index.txt
-    if [ $disponibles_encontrados -eq 0 ]; then
-        INDEX_FILE=""
-        for dir in "/etc/easy-rsa/pki" "/etc/openvpn/easy-rsa/pki" "/etc/openvpn"; do
-            if [ -f "$dir/index.txt" ]; then
-                INDEX_FILE="$dir/index.txt"
-                break
-            fi
-        done
-        
-        if [ -n "$INDEX_FILE" ]; then
-            grep "^V" "$INDEX_FILE" 2>/dev/null | while read line; do
+    if [ -n "$INDEX_FILE" ]; then
+        grep "^V" "$INDEX_FILE" 2>/dev/null | {
+            while read line; do
                 cliente=$(echo "$line" | awk '{print $NF}')
                 if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
+                    activos=$((activos + 1))
                     nombre_descriptivo=$(obtener_nombre "$cliente")
-                    echo "   $nombre_descriptivo ($cliente)"
-                    disponibles_encontrados=1
+                    echo "   $activos) $nombre_descriptivo ($cliente)"
                 fi
             done
-        fi
+        }
     fi
     
-    if [ $disponibles_encontrados -eq 0 ]; then
-        echo "   No hay clientes disponibles para bloquear"
+    if [ $activos -eq 0 ]; then
+        echo "   ℹ️  No hay clientes disponibles"
         return
     fi
     
     echo ""
-    echo -n "Cliente a BLOQUEAR: "
-    read INPUT_CLIENTE
+    echo -n "Número del cliente a BLOQUEAR: "
+    read num_cliente
     
-    # Buscar cliente real
-    CLIENTE_REAL=""
-    if grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
-        CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
-    else
-        CLIENTE_REAL=$INPUT_CLIENTE
+    # Obtener cliente seleccionado
+    count=0
+    cliente_seleccionado=""
+    if [ -n "$INDEX_FILE" ]; then
+        grep "^V" "$INDEX_FILE" 2>/dev/null | {
+            while read line; do
+                cliente=$(echo "$line" | awk '{print $NF}')
+                if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
+                    count=$((count + 1))
+                    if [ $count -eq $num_cliente ]; then
+                        cliente_seleccionado="$cliente"
+                        echo "$cliente" > /tmp/cliente_seleccionado.txt
+                    fi
+                fi
+            done
+        }
+    fi
+    
+    if [ -f "/tmp/cliente_seleccionado.txt" ]; then
+        cliente_seleccionado=$(cat /tmp/cliente_seleccionado.txt)
+        rm -f /tmp/cliente_seleccionado.txt
+    fi
+    
+    if [ -z "$cliente_seleccionado" ]; then
+        echo "❌ Selección inválida"
+        return
     fi
     
     echo ""
-    echo "🔍 BUSCANDO IPs HISTÓRICAS DE: $CLIENTE_REAL"
-    IPS_CLIENTE=$(obtener_ips_cliente "$CLIENTE_REAL")
+    echo "🔍 BUSCANDO IPs DE: $cliente_seleccionado"
+    IPS_CLIENTE=$(obtener_ips_cliente "$cliente_seleccionado")
     
     if [ -z "$IPS_CLIENTE" ]; then
-        echo "   ℹ️  No hay IPs registradas para este cliente"
+        echo "   ℹ️  No hay IPs registradas"
         echo ""
         echo "💡 Para añadir IPs manualmente:"
-        echo "   echo '$CLIENTE_REAL:192.168.1.100:\$(date)' >> $IP_HISTORY_FILE"
+        echo "   echo '$cliente_seleccionado:192.168.1.100:\$(date)' >> $IP_HISTORY_FILE"
         return
     fi
     
     echo "   📋 IPs encontradas:"
-    contador=0
+    count=0
     for ip in $IPS_CLIENTE; do
-        contador=$((contador + 1))
-        echo "      $contador) $ip"
+        count=$((count + 1))
+        echo "      $count) $ip"
     done
     
     echo ""
-    echo "⚠️  ¿Qué tipo de bloqueo deseas realizar?"
-    echo "   1) Bloqueo NORMAL (solo IPs actuales)"
-    echo "   2) Bloqueo COMPLETO (todas las IPs históricas)"
-    echo "   3) Cancelar operación"
-    echo ""
-    echo -n "Selecciona [1-3]: "
-    read opcion_bloqueo
+    echo -n "¿Bloquear TODAS estas IPs? (s/N): "
+    read confirmar
     
-    case $opcion_bloqueo in
-        1)
-            echo ""
-            echo "🛡️  APLICANDO BLOQUEO NORMAL..."
-            
-            bloqueadas=0
-            for ip in $IPS_CLIENTE; do
-                if bloquear_ip_firewall "$ip" "$CLIENTE_REAL"; then
-                    echo "   🔒 IP $ip BLOQUEADA"
-                    bloqueadas=$((bloqueadas + 1))
-                else
-                    echo "   ❌ Error bloqueando IP $ip"
-                fi
-            done
-            
-            echo "$CLIENTE_REAL:$(date '+%Y-%m-%d %H:%M:%S'):normal" >> "$SUSPENDED_FILE"
-            
-            echo ""
-            echo "✅ CLIENTE BLOQUEADO"
-            echo "   👤 Cliente: $CLIENTE_REAL"
-            echo "   🛡️  IPs bloqueadas: $bloqueadas"
-            ;;
-        2)
-            echo ""
-            echo "🛡️  APLICANDO BLOQUEO COMPLETO..."
-            
-            TOTAL=0
-            BLOQUEADAS=0
-            
-            for ip in $IPS_CLIENTE; do
-                TOTAL=$((TOTAL + 1))
-                if bloquear_ip_firewall "$ip" "$CLIENTE_REAL"; then
-                    echo "   🔒 IP $ip BLOQUEADA"
-                    BLOQUEADAS=$((BLOQUEADAS + 1))
-                fi
-            done
-            
-            echo "$CLIENTE_REAL:$(date '+%Y-%m-%d %H:%M:%S'):completo" >> "$SUSPENDED_FILE"
-            
-            echo ""
-            echo "✅ BLOQUEO COMPLETO APLICADO"
-            echo "   👤 Cliente: $CLIENTE_REAL"
-            echo "   📊 IPs encontradas: $TOTAL"
-            echo "   🛡️  IPs bloqueadas: $BLOQUEADAS"
-            ;;
-        3)
-            echo "❌ Operación cancelada"
-            return
-            ;;
-        *)
-            echo "❌ Opción inválida"
-            return
-            ;;
-    esac
+    if [ "$confirmar" != "s" ] && [ "$confirmar" != "S" ]; then
+        echo "❌ Operación cancelada"
+        return
+    fi
+    
+    echo ""
+    echo "🛡️  BLOQUEANDO IPs..."
+    bloqueadas=0
+    for ip in $IPS_CLIENTE; do
+        if bloquear_ip_firewall "$ip" "$cliente_seleccionado"; then
+            echo "   🔒 $ip - BLOQUEADA"
+            bloqueadas=$((bloqueadas + 1))
+        else
+            echo "   ❌ $ip - Error"
+        fi
+    done
+    
+    # Añadir a lista de bloqueados
+    echo "$cliente_seleccionado:$(date '+%Y-%m-%d %H:%M:%S')" >> "$SUSPENDED_FILE"
+    
+    echo ""
+    echo "✅ CLIENTE BLOQUEADO"
+    echo "   👤 $cliente_seleccionado"
+    echo "   🛡️  $bloqueadas IPs bloqueadas"
 }
 
 # Función para DESBLOQUEAR cliente
@@ -371,184 +373,114 @@ desbloquear_cliente() {
     echo "✅ DESBLOQUEAR CLIENTE"
     echo "======================"
     
-    echo "Clientes actualmente BLOQUEADOS:"
-    bloqueados_encontrados=0
+    echo "Clientes BLOQUEADOS:"
+    echo ""
     
-    if [ -f "$SUSPENDED_FILE" ] && [ -s "$SUSPENDED_FILE" ]; then
-        while IFS= read -r line; do
-            cliente=$(echo "$line" | cut -d: -f1)
-            if [ -n "$cliente" ]; then
-                nombre_descriptivo=$(obtener_nombre "$cliente")
-                echo "   $nombre_descriptivo ($cliente)"
-                bloqueados_encontrados=1
-            fi
-        done < "$SUSPENDED_FILE"
+    if [ ! -s "$SUSPENDED_FILE" ]; then
+        echo "   ℹ️  No hay clientes bloqueados"
+        return
     fi
     
-    if [ $bloqueados_encontrados -eq 0 ]; then
-        echo "   No hay clientes bloqueados"
+    # Mostrar clientes bloqueados
+    count=0
+    while IFS=: read -r cliente fecha resto; do
+        count=$((count + 1))
+        nombre_descriptivo=$(obtener_nombre "$cliente")
+        echo "   $count) $nombre_descriptivo ($cliente) - $fecha"
+    done < "$SUSPENDED_FILE"
+    
+    echo ""
+    echo -n "Número del cliente a DESBLOQUEAR: "
+    read num_cliente
+    
+    # Obtener cliente seleccionado
+    count=0
+    cliente_seleccionado=""
+    while IFS=: read -r cliente fecha resto; do
+        count=$((count + 1))
+        if [ $count -eq $num_cliente ]; then
+            cliente_seleccionado="$cliente"
+            break
+        fi
+    done < "$SUSPENDED_FILE"
+    
+    if [ -z "$cliente_seleccionado" ]; then
+        echo "❌ Selección inválida"
         return
     fi
     
     echo ""
-    echo -n "Cliente a DESBLOQUEAR: "
-    read INPUT_CLIENTE
+    echo "🔓 DESBLOQUEANDO: $cliente_seleccionado"
     
-    # Buscar cliente real
-    CLIENTE_REAL=""
-    if grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
-        CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
-    else
-        CLIENTE_REAL=$INPUT_CLIENTE
-    fi
-    
-    if ! grep -q "^${CLIENTE_REAL}:" "$SUSPENDED_FILE" 2>/dev/null; then
-        echo "❌ Cliente '$INPUT_CLIENTE' no está bloqueado"
-        return
-    fi
-    
-    echo ""
-    echo "🔓 DESBLOQUEANDO IPs DE: $CLIENTE_REAL"
-    IPS_CLIENTE=$(obtener_ips_cliente "$CLIENTE_REAL")
-    
-    if [ -z "$IPS_CLIENTE" ]; then
-        echo "   ℹ️  No hay IPs registradas para desbloquear"
-    else
-        echo "   📋 IPs a desbloquear:"
+    # Obtener y desbloquear IPs
+    IPS_CLIENTE=$(obtener_ips_cliente "$cliente_seleccionado")
+    if [ -n "$IPS_CLIENTE" ]; then
         for ip in $IPS_CLIENTE; do
             desbloquear_ip_firewall "$ip"
-            echo "   ✅ IP $ip DESBLOQUEADA"
+            echo "   ✅ $ip - DESBLOQUEADA"
         done
     fi
     
     # Eliminar de lista de bloqueados
-    grep -v "^${CLIENTE_REAL}:" "$SUSPENDED_FILE" 2>/dev/null > "${SUSPENDED_FILE}.tmp"
-    mv "${SUSPENDED_FILE}.tmp" "$SUSPENDED_FILE"
+    grep -v "^${cliente_seleccionado}:" "$SUSPENDED_FILE" > /tmp/suspended.tmp
+    mv /tmp/suspended.tmp "$SUSPENDED_FILE"
     
     echo ""
     echo "✅ CLIENTE DESBLOQUEADO"
-    echo "   👤 Cliente: $CLIENTE_REAL"
+    echo "   👤 $cliente_seleccionado"
 }
 
-# Función para bloqueo profundo
-bloqueo_profundo() {
-    echo ""
-    echo "🛡️  BLOQUEO PROFUNDO"
-    echo "==================="
-    
-    if ! command -v iptables >/dev/null 2>&1; then
-        echo "❌ iptables no está instalado"
-        return
-    fi
-    
-    echo "Clientes con IPs registradas:"
-    clientes_con_ips=$(cut -d: -f1 "$IP_HISTORY_FILE" 2>/dev/null | sort -u)
-    
-    if [ -z "$clientes_con_ips" ]; then
-        echo "   No hay clientes con IPs registradas"
-        return
-    fi
-    
-    for cliente in $clientes_con_ips; do
-        ips_count=$(grep -c "^${cliente}:" "$IP_HISTORY_FILE" 2>/dev/null)
-        nombre_descriptivo=$(obtener_nombre "$cliente")
-        echo "   $nombre_descriptivo ($cliente) - $ips_count IPs"
-    done
-    
-    echo ""
-    echo -n "Cliente a bloquear PROFUNDAMENTE: "
-    read INPUT_CLIENTE
-    
-    CLIENTE_REAL=""
-    if grep -q ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" 2>/dev/null; then
-        CLIENTE_REAL=$(grep ":${INPUT_CLIENTE}$" "$NOMBRES_FILE" | cut -d: -f1)
-    else
-        CLIENTE_REAL=$INPUT_CLIENTE
-    fi
-    
-    IPS_CLIENTE=$(obtener_ips_cliente "$CLIENTE_REAL")
-    
-    if [ -z "$IPS_CLIENTE" ]; then
-        echo "❌ No hay IPs registradas para '$INPUT_CLIENTE'"
-        return
-    fi
-    
-    echo ""
-    echo -n "¿Estás seguro de bloquear profundamente? (s/N): "
-    read confirmacion
-    
-    if [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ]; then
-        echo "❌ Operación cancelada"
-        return
-    fi
-    
-    echo ""
-    echo "🛡️  APLICANDO BLOQUEO PROFUNDO..."
-    
-    TOTAL=0
-    for ip in $IPS_CLIENTE; do
-        if bloquear_ip_firewall "$ip" "$CLIENTE_REAL"; then
-            echo "   🔒 IP $ip BLOQUEADA"
-            TOTAL=$((TOTAL + 1))
-        fi
-    done
-    
-    echo "$CLIENTE_REAL:$(date '+%Y-%m-%d %H:%M:%S'):profundo" >> "$SUSPENDED_FILE"
-    
-    echo ""
-    echo "✅ BLOQUEO PROFUNDO APLICADO"
-    echo "   👤 Cliente: $CLIENTE_REAL"
-    echo "   🛡️  IPs bloqueadas: $TOTAL"
-}
-
-# Función para gestión de nombres (COMPATIBLE CON ASH)
+# Función para gestionar nombres
 gestionar_nombres() {
     while true; do
         echo ""
-        echo "🏷️  GESTIÓN DE NOMBRES"
-        echo "======================"
+        echo "🏷️  GESTIONAR NOMBRES"
+        echo "===================="
         echo ""
-        echo "1) 📝 Ver todos los nombres"
-        echo "2) ➕ Asignar nuevo nombre"
-        echo "3) ✏️  Modificar nombre"
-        echo "4) 🗑️  Eliminar nombre"
-        echo "5) ↩️  Volver al menú principal"
+        echo "1) Ver nombres"
+        echo "2) Asignar nombre"
+        echo "3) Modificar nombre"
+        echo "4) Eliminar nombre"
+        echo "5) Volver al menú"
         echo ""
         echo -n "Selecciona [1-5]: "
-        read opcion_nombre
+        read opcion
         
-        case $opcion_nombre in
+        case $opcion in
             1)
                 echo ""
+                echo "📋 NOMBRES ASIGNADOS:"
+                echo ""
                 if [ -s "$NOMBRES_FILE" ]; then
-                    echo "Nombres asignados:"
-                    echo ""
                     while IFS=: read -r cliente nombre; do
                         echo "   $nombre ($cliente)"
                     done < "$NOMBRES_FILE"
                 else
-                    echo "📭 No hay nombres asignados"
+                    echo "   📭 No hay nombres asignados"
                 fi
                 ;;
-            
+                
             2)
                 echo ""
-                echo -n "Certificado del cliente: "
+                echo "➕ ASIGNAR NOMBRE"
+                echo ""
+                echo -n "Certificado (ej: client1): "
                 read cliente
-                echo -n "Nombre descriptivo: "
+                echo -n "Nombre (ej: Juan): "
                 read nombre
                 
                 if [ -n "$cliente" ] && [ -n "$nombre" ]; then
-                    # Eliminar si ya existe
-                    grep -v "^${cliente}:" "$NOMBRES_FILE" 2>/dev/null > "${NOMBRES_FILE}.tmp"
-                    echo "${cliente}:${nombre}" >> "${NOMBRES_FILE}.tmp"
-                    mv "${NOMBRES_FILE}.tmp" "$NOMBRES_FILE"
+                    # Eliminar si existe
+                    grep -v "^${cliente}:" "$NOMBRES_FILE" > /tmp/nombres.tmp
+                    # Añadir nuevo
+                    echo "${cliente}:${nombre}" >> /tmp/nombres.tmp
+                    mv /tmp/nombres.tmp "$NOMBRES_FILE"
                     echo "✅ Nombre asignado: $nombre ($cliente)"
                 else
-                    echo "❌ Error: datos incompletos"
+                    echo "❌ Datos incompletos"
                 fi
                 ;;
-            
+                
             3)
                 echo ""
                 if [ ! -s "$NOMBRES_FILE" ]; then
@@ -556,7 +488,9 @@ gestionar_nombres() {
                     continue
                 fi
                 
-                echo "Selecciona nombre a modificar:"
+                echo "✏️  MODIFICAR NOMBRE"
+                echo ""
+                echo "Selecciona:"
                 echo ""
                 count=1
                 while IFS=: read -r cliente nombre; do
@@ -566,38 +500,38 @@ gestionar_nombres() {
                 
                 echo ""
                 echo -n "Número: "
-                read numero
+                read num
                 
                 count=1
-                cliente=""
+                cliente_mod=""
                 nombre_actual=""
                 while IFS=: read -r c n; do
-                    if [ $count -eq $numero ]; then
-                        cliente="$c"
+                    if [ $count -eq $num ]; then
+                        cliente_mod="$c"
                         nombre_actual="$n"
                         break
                     fi
                     count=$((count + 1))
                 done < "$NOMBRES_FILE"
                 
-                if [ -z "$cliente" ]; then
+                if [ -z "$cliente_mod" ]; then
                     echo "❌ Número inválido"
                     continue
                 fi
                 
                 echo ""
-                echo "Modificando: $nombre_actual ($cliente)"
+                echo "Modificando: $nombre_actual ($cliente_mod)"
                 echo -n "Nuevo nombre: "
                 read nuevo_nombre
                 
                 if [ -n "$nuevo_nombre" ]; then
-                    grep -v "^${cliente}:" "$NOMBRES_FILE" > "${NOMBRES_FILE}.tmp"
-                    echo "${cliente}:${nuevo_nombre}" >> "${NOMBRES_FILE}.tmp"
-                    mv "${NOMBRES_FILE}.tmp" "$NOMBRES_FILE"
+                    grep -v "^${cliente_mod}:" "$NOMBRES_FILE" > /tmp/nombres.tmp
+                    echo "${cliente_mod}:${nuevo_nombre}" >> /tmp/nombres.tmp
+                    mv /tmp/nombres.tmp "$NOMBRES_FILE"
                     echo "✅ Nombre modificado"
                 fi
                 ;;
-            
+                
             4)
                 echo ""
                 if [ ! -s "$NOMBRES_FILE" ]; then
@@ -605,7 +539,9 @@ gestionar_nombres() {
                     continue
                 fi
                 
-                echo "Selecciona nombre a eliminar:"
+                echo "🗑️  ELIMINAR NOMBRE"
+                echo ""
+                echo "Selecciona:"
                 echo ""
                 count=1
                 while IFS=: read -r cliente nombre; do
@@ -615,40 +551,40 @@ gestionar_nombres() {
                 
                 echo ""
                 echo -n "Número: "
-                read numero
+                read num
                 
                 count=1
-                cliente=""
-                nombre=""
+                cliente_del=""
+                nombre_del=""
                 while IFS=: read -r c n; do
-                    if [ $count -eq $numero ]; then
-                        cliente="$c"
-                        nombre="$n"
+                    if [ $count -eq $num ]; then
+                        cliente_del="$c"
+                        nombre_del="$n"
                         break
                     fi
                     count=$((count + 1))
                 done < "$NOMBRES_FILE"
                 
-                if [ -z "$cliente" ]; then
+                if [ -z "$cliente_del" ]; then
                     echo "❌ Número inválido"
                     continue
                 fi
                 
                 echo ""
-                echo -n "¿Eliminar '$nombre' de '$cliente'? (s/N): "
+                echo -n "¿Eliminar '$nombre_del'? (s/N): "
                 read confirmar
                 
                 if [ "$confirmar" = "s" ] || [ "$confirmar" = "S" ]; then
-                    grep -v "^${cliente}:" "$NOMBRES_FILE" > "${NOMBRES_FILE}.tmp"
-                    mv "${NOMBRES_FILE}.tmp" "$NOMBRES_FILE"
+                    grep -v "^${cliente_del}:" "$NOMBRES_FILE" > /tmp/nombres.tmp
+                    mv /tmp/nombres.tmp "$NOMBRES_FILE"
                     echo "✅ Nombre eliminado"
                 fi
                 ;;
-            
+                
             5)
                 return
                 ;;
-            
+                
             *)
                 echo "❌ Opción inválida"
                 ;;
@@ -665,63 +601,79 @@ estado_servicio() {
     echo ""
     echo "🔍 ESTADO DEL SISTEMA"
     echo "===================="
+    echo ""
     
-    # Estado OpenVPN
+    # OpenVPN
     if pgrep openvpn >/dev/null; then
         echo "✅ OpenVPN: ACTIVO"
     else
         echo "❌ OpenVPN: INACTIVO"
     fi
     
-    # Estado firewall
+    # iptables
     echo ""
-    echo "🛡️  ESTADO DEL FIREWALL:"
+    echo "🛡️  IPTABLES:"
     if command -v iptables >/dev/null 2>&1; then
-        # Contar reglas
-        total_drop=$(iptables -nL INPUT 2>/dev/null | grep -c DROP)
-        echo "   📊 Reglas DROP en INPUT: $total_drop"
-        
-        # Mostrar algunas reglas
-        if [ $total_drop -gt 0 ]; then
-            echo "   📋 Primeras IPs bloqueadas:"
-            iptables -nL INPUT 2>/dev/null | grep DROP | head -3 | while read line; do
-                ip=$(echo "$line" | awk '{print $4}')
-                if [ -n "$ip" ]; then
-                    echo "   🔒 $ip"
-                fi
-            done
-        fi
+        echo "   ✅ Instalado"
+        # Contar reglas DROP
+        drops=$(iptables -nL INPUT 2>/dev/null | grep -c DROP)
+        echo "   📊 Reglas DROP: $drops"
     else
-        echo "   ⚠️  iptables no instalado"
+        echo "   ❌ No instalado"
     fi
     
-    # Estadísticas nuestro sistema
+    # Estadísticas
     echo ""
-    echo "📊 ESTADÍSTICAS GESTOR VPN:"
-    nombres_count=$(grep -c ":" "$NOMBRES_FILE" 2>/dev/null || echo 0)
-    echo "   👥 Clientes con nombres: $nombres_count"
+    echo "📊 ESTADÍSTICAS:"
+    nombres=$(grep -c ":" "$NOMBRES_FILE" 2>/dev/null || echo 0)
+    echo "   👥 Nombres asignados: $nombres"
     
-    ips_count=$(wc -l < "$IP_HISTORY_FILE" 2>/dev/null || echo 0)
-    echo "   📍 IPs registradas: $ips_count"
+    ips=$(wc -l < "$IP_HISTORY_FILE" 2>/dev/null || echo 0)
+    echo "   📍 IPs registradas: $ips"
     
-    bloqueados_count=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
-    echo "   🚫 Clientes bloqueados: $bloqueados_count"
+    bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
+    echo "   🚫 Clientes bloqueados: $bloqueados"
+    
+    # IPs bloqueadas actuales
+    echo ""
+    echo "🔒 IPs BLOQUEADAS ACTUALES:"
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -nL INPUT 2>/dev/null | grep DROP | {
+            count=0
+            while read line; do
+                ip=$(echo "$line" | awk '{print $4}')
+                if [ -n "$ip" ]; then
+                    count=$((count + 1))
+                    if [ $count -le 5 ]; then
+                        echo "   $ip"
+                    fi
+                fi
+            done
+            if [ $count -gt 5 ]; then
+                echo "   ... y $((count - 5)) más"
+            fi
+            if [ $count -eq 0 ]; then
+                echo "   ℹ️  Ninguna"
+            fi
+        }
+    else
+        echo "   ℹ️  iptables no disponible"
+    fi
 }
 
-# Menú principal
+# Bucle principal del menú
 while true; do
     mostrar_menu
-    read OPCION
+    read opcion
     
-    case $OPCION in
+    case $opcion in
         1) ver_conectados ;;
         2) listar_clientes ;;
         3) bloquear_cliente ;;
         4) desbloquear_cliente ;;
-        5) bloqueo_profundo ;;
-        6) gestionar_nombres ;;
-        7) estado_servicio ;;
-        8)
+        5) gestionar_nombres ;;
+        6) estado_servicio ;;
+        7)
             echo ""
             echo "👋 Saliendo..."
             exit 0
@@ -737,22 +689,25 @@ while true; do
 done
 GESTOR_SCRIPT
 
-# Hacer el script ejecutable
+# Dar permisos
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ SCRIPT CORREGIDO PARA OPENWRT/ASH"
+echo "✅ GESTOR VPN INSTALADO CORRECTAMENTE"
 echo ""
-echo "🔧 CAMBIOS REALIZADOS:"
-echo "   • Eliminado Process Substitution (< <(...))"
-echo "   • Sintaxis compatible con ash (shell de OpenWRT)"
-echo "   • Métodos alternativos para bucles"
-echo "   • Validación de IP más simple"
+echo "🔧 COMPATIBILIDAD:"
+echo "   • 100% compatible con ash (OpenWRT)"
+echo "   • Sin Process Substitution"
+echo "   • Sintaxis simple y robusta"
 echo ""
-echo "🚀 PARA EJECUTAR:"
+echo "🚀 PARA USAR:"
 echo "   gestor-vpn"
 echo ""
-echo "💡 PRUEBA RÁPIDA:"
-echo "   1. Asigna un nombre: echo 'client1:Juan' >> /etc/openvpn/clientes/nombres.txt"
-echo "   2. Añade IPs: echo 'client1:192.168.1.100:\$(date)' >> /etc/openvpn/clientes/ip_history.txt"
-echo "   3. Ejecuta: gestor-vpn"
+echo "💡 PRIMEROS PASOS:"
+echo "   1. Asigna nombres: opción 5 → opción 2"
+echo "   2. Añade IPs manualmente si es necesario:"
+echo "      echo 'client1:192.168.1.100:\$(date)' >> /etc/openvpn/clientes/ip_history.txt"
+echo "   3. Prueba bloqueo/desbloqueo"
+echo ""
+echo "⚠️  Si iptables no está instalado:"
+echo "   opkg update && opkg install iptables-nft"
