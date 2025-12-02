@@ -4,31 +4,6 @@ echo ""
 echo "🔧 IMPLEMENTANDO BLOQUEO POR IP/FIREWALL EN OPENWRT"
 echo "=================================================="
 
-# Verificar que estamos en OpenWRT
-if [ -f "/etc/openwrt_release" ] || [ -f "/etc/openwrt_version" ] || [ "$(cat /etc/os-release 2>/dev/null | grep OPENWRT)" ]; then
-    echo "✅ Sistema detectado: OpenWRT"
-    OPENWRT="yes"
-else
-    echo "⚠️  No parece ser OpenWRT, continuando igualmente..."
-    OPENWRT="no"
-fi
-
-# En OpenWRT, iptables suele ser nftables-compat
-if [ "$OPENWRT" = "yes" ]; then
-    # Verificar si tenemos iptables (en OpenWRT suele ser iptables-nft)
-    if ! command -v iptables >/dev/null 2>&1; then
-        echo "📦 Instalando iptables en OpenWRT..."
-        opkg update
-        opkg install iptables-nft iptables-utils
-        
-        # También necesitamos algunos paquetes básicos
-        opkg install coreutils-nohup procps-ng-pkill
-    fi
-    
-    # En OpenWRT, /usr/local/bin no existe por defecto
-    mkdir -p /usr/bin /etc/openvpn/clientes
-fi
-
 cat > /usr/bin/gestor-vpn << 'GESTOR_SCRIPT'
 #!/bin/sh
 
@@ -57,7 +32,7 @@ registrar_ip() {
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
     # Solo registrar si es una IP válida
-    if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if echo "$ip" | grep -q '^[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}$'; then
         # Eliminar entradas antiguas del mismo cliente+IP
         grep -v "^${cliente}:${ip}:" "$IP_HISTORY_FILE" 2>/dev/null > "${IP_HISTORY_FILE}.tmp"
         mv "${IP_HISTORY_FILE}.tmp" "$IP_HISTORY_FILE"
@@ -81,7 +56,6 @@ bloquear_ip_firewall() {
     # Verificar si iptables existe
     if ! command -v iptables >/dev/null 2>&1; then
         echo "❌ ERROR: iptables no disponible"
-        echo "   En OpenWRT: opkg install iptables-nft"
         return 1
     fi
     
@@ -99,10 +73,6 @@ bloquear_ip_firewall() {
         fi
         return 0
     else
-        # Intentar con ip6tables para IPv6
-        if [[ $ip =~ : ]]; then
-            ip6tables -I INPUT -s "$ip" -j DROP 2>/dev/null && return 0
-        fi
         return 1
     fi
 }
@@ -116,13 +86,8 @@ desbloquear_ip_firewall() {
         return 1
     fi
     
-    # Eliminar regla de iptables (IPv4)
-    iptables -D INPUT -s "$ip" -j DROP 2>/dev/null
-    
-    # También eliminar de IPv6 si es una dirección IPv6
-    if [[ $ip =~ : ]]; then
-        ip6tables -D INPUT -s "$ip" -j DROP 2>/dev/null 2>&1
-    fi
+    # Eliminar regla de iptables
+    iptables -D INPUT -s "$ip" -j DROP 2>/dev/null 2>&1
     
     # Eliminar de persistencia
     if [ -f "/etc/openvpn/blocked_ips.txt" ]; then
@@ -135,31 +100,29 @@ desbloquear_ip_firewall() {
 mostrar_menu() {
     clear
     echo ""
-    echo "🔧 GESTOR VPN - OPENWRT (BLOQUEO POR IP)"
-    echo "========================================"
+    echo "🔧 GESTOR VPN - BLOQUEO POR IP"
+    echo "=============================="
     echo ""
-    echo "1) 👁️  Ver clientes conectados (registrar IPs)"
+    echo "1) 👁️  Ver clientes conectados"
     echo "2) 📋 Listar todos los clientes"
     echo "3) 🚫 BLOQUEAR cliente (bloquear IPs)"
     echo "4) ✅ DESBLOQUEAR cliente (desbloquear IPs)"
     echo "5) 🛡️  BLOQUEO PROFUNDO"
     echo "6) 🏷️  GESTIONAR NOMBRES"
     echo "7) 🔍 Estado del sistema"
-    echo "8) ⚙️  Configurar OpenWRT"
-    echo "9) ❌ Salir"
+    echo "8) ❌ Salir"
     echo ""
-    echo -n "Selecciona [1-9]: "
+    echo -n "Selecciona [1-8]: "
 }
 
-# Función para ver clientes conectados y registrar IPs
+# Función para ver clientes conectados y registrar IPs (COMPATIBLE CON ASH)
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
     
-    # En OpenWRT, el archivo de log puede estar en otro lugar
-    STATUS_FILES="/var/log/openvpn-status.log /tmp/openvpn-status.log /var/run/openvpn.status"
+    # Buscar archivo de estado
     STATUS_FILE=""
-    for file in $STATUS_FILES; do
+    for file in "/var/log/openvpn-status.log" "/tmp/openvpn-status.log"; do
         if [ -f "$file" ] && grep -q "CLIENT_LIST" "$file"; then
             STATUS_FILE="$file"
             break
@@ -167,7 +130,13 @@ ver_conectados() {
     done
     
     if [ -n "$STATUS_FILE" ]; then
-        while IFS=$'\t' read -r _ cliente ip_externa ip_interna _ _ _ _; do
+        # Método compatible con ash (sin process substitution)
+        grep "^CLIENT_LIST" "$STATUS_FILE" | while read line; do
+            # Procesar línea manualmente
+            cliente=$(echo "$line" | awk '{print $2}')
+            ip_externa=$(echo "$line" | awk '{print $3}')
+            ip_interna=$(echo "$line" | awk '{print $4}')
+            
             cliente=$(echo "$cliente" | xargs)
             ip_externa=$(echo "$ip_externa" | xargs)
             
@@ -186,45 +155,32 @@ ver_conectados() {
                 echo "      📍 IP Interna: $ip_interna"
                 echo ""
             fi
-        done < <(grep "^CLIENT_LIST" "$STATUS_FILE")
+        done
     else
-        echo "   ℹ️  No hay clientes conectados o no se encuentra el log"
+        echo "   ℹ️  No hay clientes conectados"
         echo ""
-        echo "💡 En OpenWRT, OpenVPN puede no generar el log por defecto."
-        echo "   Para habilitarlo, añade a /etc/config/openvpn:"
-        echo "   option status '/var/log/openvpn-status.log'"
-        echo ""
-        echo "💡 Para probar manualmente:"
-        echo "   echo 'client1:192.168.1.100:\$(date)' >> $IP_HISTORY_FILE"
+        echo "💡 El archivo de estado no se encuentra."
+        echo "   Asegúrate de que OpenVPN esté configurado para generarlo."
     fi
 }
 
-# Función para listar clientes
+# Función para listar clientes (COMPATIBLE CON ASH)
 listar_clientes() {
     echo ""
     echo "📋 LISTADO DE CLIENTES"
     echo "======================"
     
-    # Buscar archivo index.txt en ubicaciones comunes de OpenWRT
+    # Buscar archivo index.txt
     INDEX_FILE=""
-    for dir in "/etc/easy-rsa/pki" "/etc/openvpn/easy-rsa/pki" "/etc/openvpn" "/root/easy-rsa/pki" "/tmp/easy-rsa/pki"; do
+    for dir in "/etc/easy-rsa/pki" "/etc/openvpn/easy-rsa/pki" "/etc/openvpn" "/root/easy-rsa/pki"; do
         if [ -f "$dir/index.txt" ]; then
             INDEX_FILE="$dir/index.txt"
-            echo "   🔍 Usando: $INDEX_FILE"
             break
         fi
     done
     
     if [ -z "$INDEX_FILE" ]; then
         echo "ℹ️  No se encuentra la base de datos de certificados"
-        echo ""
-        echo "💡 En OpenWRT, los certificados pueden estar en:"
-        echo "   • /etc/easy-rsa/pki/"
-        echo "   • /etc/openvpn/"
-        echo "   • /tmp/easy-rsa/"
-        echo ""
-        echo "💡 Puedes crear certificados con:"
-        echo "   cd /etc/easy-rsa && ./easyrsa build-client-full client1 nopass"
         return
     fi
     
@@ -232,17 +188,16 @@ listar_clientes() {
     echo ""
     count=0
     
-    # Extraer clientes
-    clientes=$(grep -E "^(V|R)" "$INDEX_FILE" 2>/dev/null | awk '{print $NF}' | sort -u)
-    
-    for cliente in $clientes; do
+    # Método compatible con ash
+    grep -E "^(V|R)" "$INDEX_FILE" 2>/dev/null | while read line; do
+        cliente=$(echo "$line" | awk '{print $NF}')
         if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
             count=$((count + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
             
             # Verificar estado
             estado="🟢"
-            if grep -q "^R.*$cliente" "$INDEX_FILE"; then
+            if echo "$line" | grep -q "^R"; then
                 estado="🔴"
             fi
             
@@ -254,19 +209,11 @@ listar_clientes() {
         fi
     done
     
-    if [ $count -eq 0 ]; then
-        echo "   📭 No hay clientes configurados"
-        echo ""
-        echo "💡 Para crear un cliente:"
-        echo "   cd /etc/easy-rsa"
-        echo "   ./easyrsa build-client-full client1 nopass"
-    else
-        echo ""
-        echo "📊 Total: $count clientes"
-    fi
+    echo ""
+    echo "📊 Total: $count clientes"
 }
 
-# Función para BLOQUEAR cliente (optimizada para OpenWRT)
+# Función para BLOQUEAR cliente
 bloquear_cliente() {
     echo ""
     echo "🚫 BLOQUEAR CLIENTE (POR IP)"
@@ -276,19 +223,15 @@ bloquear_cliente() {
     if ! command -v iptables >/dev/null 2>&1; then
         echo "❌ ERROR: iptables no está instalado"
         echo ""
-        echo "💡 En OpenWRT, instala con:"
-        echo "   opkg update"
-        echo "   opkg install iptables-nft"
-        echo ""
-        echo "⚠️  El bloqueo por IP no funcionará sin iptables"
+        echo "💡 Instala con: opkg update && opkg install iptables-nft"
         return
     fi
     
     echo "Clientes disponibles para bloquear:"
     disponibles_encontrados=0
     
-    # Listar clientes activos
-    for cliente_file in /etc/openvpn/client*.conf /etc/openvpn/ccd/* 2>/dev/null; do
+    # Buscar clientes en archivos de configuración
+    for cliente_file in /etc/openvpn/client*.conf 2>/dev/null; do
         if [ -f "$cliente_file" ]; then
             cliente=$(basename "$cliente_file" .conf)
             if [ "$cliente" != "*" ]; then
@@ -299,12 +242,8 @@ bloquear_cliente() {
         fi
     done
     
+    # Si no hay archivos .conf, buscar en index.txt
     if [ $disponibles_encontrados -eq 0 ]; then
-        echo "   No hay clientes detectados en /etc/openvpn/"
-        echo ""
-        echo "💡 Buscando en base de datos de certificados..."
-        
-        # Buscar en index.txt como alternativa
         INDEX_FILE=""
         for dir in "/etc/easy-rsa/pki" "/etc/openvpn/easy-rsa/pki" "/etc/openvpn"; do
             if [ -f "$dir/index.txt" ]; then
@@ -314,8 +253,8 @@ bloquear_cliente() {
         done
         
         if [ -n "$INDEX_FILE" ]; then
-            clientes_activos=$(grep "^V" "$INDEX_FILE" 2>/dev/null | awk '{print $NF}' | sort -u)
-            for cliente in $clientes_activos; do
+            grep "^V" "$INDEX_FILE" 2>/dev/null | while read line; do
+                cliente=$(echo "$line" | awk '{print $NF}')
                 if [ -n "$cliente" ] && [ "$cliente" != "unknown" ]; then
                     nombre_descriptivo=$(obtener_nombre "$cliente")
                     echo "   $nombre_descriptivo ($cliente)"
@@ -349,12 +288,8 @@ bloquear_cliente() {
     if [ -z "$IPS_CLIENTE" ]; then
         echo "   ℹ️  No hay IPs registradas para este cliente"
         echo ""
-        echo "💡 Opciones:"
-        echo "   1. Usa la opción 1 para ver clientes conectados"
-        echo "   2. Añade IPs manualmente:"
-        echo "      echo '$CLIENTE_REAL:192.168.1.100:\$(date)' >> $IP_HISTORY_FILE"
-        echo "   3. Si el cliente está conectado ahora, usa:"
-        echo "      cat /tmp/openvpn-status.log | grep CLIENT_LIST | grep $CLIENTE_REAL"
+        echo "💡 Para añadir IPs manualmente:"
+        echo "   echo '$CLIENTE_REAL:192.168.1.100:\$(date)' >> $IP_HISTORY_FILE"
         return
     fi
     
@@ -428,10 +363,6 @@ bloquear_cliente() {
             return
             ;;
     esac
-    
-    echo ""
-    echo "💡 En OpenWRT, las reglas iptables NO son persistentes por defecto."
-    echo "   Para hacerlas persistentes, usa la opción 8 del menú principal."
 }
 
 # Función para DESBLOQUEAR cliente
@@ -444,10 +375,11 @@ desbloquear_cliente() {
     bloqueados_encontrados=0
     
     if [ -f "$SUSPENDED_FILE" ] && [ -s "$SUSPENDED_FILE" ]; then
-        while IFS=: read -r cliente fecha tipo; do
+        while IFS= read -r line; do
+            cliente=$(echo "$line" | cut -d: -f1)
             if [ -n "$cliente" ]; then
                 nombre_descriptivo=$(obtener_nombre "$cliente")
-                echo "   $nombre_descriptivo ($cliente) - $fecha"
+                echo "   $nombre_descriptivo ($cliente)"
                 bloqueados_encontrados=1
             fi
         done < "$SUSPENDED_FILE"
@@ -569,7 +501,7 @@ bloqueo_profundo() {
     echo "   🛡️  IPs bloqueadas: $TOTAL"
 }
 
-# Función para gestión de nombres
+# Función para gestión de nombres (COMPATIBLE CON ASH)
 gestionar_nombres() {
     while true; do
         echo ""
@@ -591,9 +523,9 @@ gestionar_nombres() {
                 if [ -s "$NOMBRES_FILE" ]; then
                     echo "Nombres asignados:"
                     echo ""
-                    cat "$NOMBRES_FILE" | while IFS=: read -r cliente nombre; do
+                    while IFS=: read -r cliente nombre; do
                         echo "   $nombre ($cliente)"
-                    done
+                    done < "$NOMBRES_FILE"
                 else
                     echo "📭 No hay nombres asignados"
                 fi
@@ -636,14 +568,22 @@ gestionar_nombres() {
                 echo -n "Número: "
                 read numero
                 
-                linea=$(sed -n "${numero}p" "$NOMBRES_FILE" 2>/dev/null)
-                if [ -z "$linea" ]; then
+                count=1
+                cliente=""
+                nombre_actual=""
+                while IFS=: read -r c n; do
+                    if [ $count -eq $numero ]; then
+                        cliente="$c"
+                        nombre_actual="$n"
+                        break
+                    fi
+                    count=$((count + 1))
+                done < "$NOMBRES_FILE"
+                
+                if [ -z "$cliente" ]; then
                     echo "❌ Número inválido"
                     continue
                 fi
-                
-                cliente=$(echo "$linea" | cut -d: -f1)
-                nombre_actual=$(echo "$linea" | cut -d: -f2)
                 
                 echo ""
                 echo "Modificando: $nombre_actual ($cliente)"
@@ -677,14 +617,22 @@ gestionar_nombres() {
                 echo -n "Número: "
                 read numero
                 
-                linea=$(sed -n "${numero}p" "$NOMBRES_FILE" 2>/dev/null)
-                if [ -z "$linea" ]; then
+                count=1
+                cliente=""
+                nombre=""
+                while IFS=: read -r c n; do
+                    if [ $count -eq $numero ]; then
+                        cliente="$c"
+                        nombre="$n"
+                        break
+                    fi
+                    count=$((count + 1))
+                done < "$NOMBRES_FILE"
+                
+                if [ -z "$cliente" ]; then
                     echo "❌ Número inválido"
                     continue
                 fi
-                
-                cliente=$(echo "$linea" | cut -d: -f1)
-                nombre=$(echo "$linea" | cut -d: -f2)
                 
                 echo ""
                 echo -n "¿Eliminar '$nombre' de '$cliente'? (s/N): "
@@ -707,21 +655,20 @@ gestionar_nombres() {
         esac
         
         echo ""
-        read -p "Presiona Enter para continuar..."
+        echo "Presiona Enter para continuar..."
+        read dummy
     done
 }
 
-# Función para estado del sistema (específica de OpenWRT)
+# Función para estado del sistema
 estado_servicio() {
     echo ""
-    echo "🔍 ESTADO DEL SISTEMA OPENWRT"
-    echo "=============================="
+    echo "🔍 ESTADO DEL SISTEMA"
+    echo "===================="
     
     # Estado OpenVPN
     if pgrep openvpn >/dev/null; then
         echo "✅ OpenVPN: ACTIVO"
-        # Mostrar interfaz tun
-        ifconfig tun0 2>/dev/null | grep "inet addr" || echo "   ℹ️  Interfaz tun0 no configurada"
     else
         echo "❌ OpenVPN: INACTIVO"
     fi
@@ -730,129 +677,35 @@ estado_servicio() {
     echo ""
     echo "🛡️  ESTADO DEL FIREWALL:"
     if command -v iptables >/dev/null 2>&1; then
-        # Reglas de bloqueo
-        echo "   Reglas INPUT de bloqueo:"
-        iptables -nL INPUT 2>/dev/null | grep DROP | head -5 | while read line; do
-            echo "   🔒 $line"
-        done
-        
         # Contar reglas
         total_drop=$(iptables -nL INPUT 2>/dev/null | grep -c DROP)
-        echo "   📊 Total reglas DROP: $total_drop"
+        echo "   📊 Reglas DROP en INPUT: $total_drop"
+        
+        # Mostrar algunas reglas
+        if [ $total_drop -gt 0 ]; then
+            echo "   📋 Primeras IPs bloqueadas:"
+            iptables -nL INPUT 2>/dev/null | grep DROP | head -3 | while read line; do
+                ip=$(echo "$line" | awk '{print $4}')
+                if [ -n "$ip" ]; then
+                    echo "   🔒 $ip"
+                fi
+            done
+        fi
     else
         echo "   ⚠️  iptables no instalado"
     fi
     
-    # Uso de memoria
-    echo ""
-    echo "💾 USO DE MEMORIA:"
-    free -h 2>/dev/null | grep Mem | awk '{print "   Memoria: "$3"/"$2" ("$4" libre)"}' || echo "   ℹ️  No se pudo obtener info de memoria"
-    
-    # Espacio en disco
-    echo ""
-    echo "💿 ESPACIO EN DISCO:"
-    df -h / | tail -1 | awk '{print "   Root: "$3"/"$2" ("$5" usado)"}'
-    
     # Estadísticas nuestro sistema
     echo ""
     echo "📊 ESTADÍSTICAS GESTOR VPN:"
-    echo "   👥 Clientes con nombres: $(grep -c ":" "$NOMBRES_FILE" 2>/dev/null || echo 0)"
-    echo "   📍 IPs registradas: $(wc -l < "$IP_HISTORY_FILE" 2>/dev/null || echo 0)"
-    echo "   🚫 Clientes bloqueados: $(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)"
-}
-
-# Función específica para configurar OpenWRT
-configurar_openwrt() {
-    echo ""
-    echo "⚙️  CONFIGURACIÓN OPENWRT"
-    echo "========================"
-    echo ""
-    echo "1) 🔧 Instalar iptables (si no está)"
-    echo "2) 📝 Configurar log de OpenVPN"
-    echo "3) 💾 Hacer reglas iptables persistentes"
-    echo "4) 🔄 Reiniciar servicios"
-    echo "5) ↩️  Volver al menú principal"
-    echo ""
-    echo -n "Selecciona [1-5]: "
-    read opcion_config
+    nombres_count=$(grep -c ":" "$NOMBRES_FILE" 2>/dev/null || echo 0)
+    echo "   👥 Clientes con nombres: $nombres_count"
     
-    case $opcion_config in
-        1)
-            echo ""
-            echo "📦 INSTALANDO IPTABLES..."
-            opkg update
-            opkg install iptables-nft iptables-utils
-            echo "✅ iptables instalado"
-            ;;
-        
-        2)
-            echo ""
-            echo "📝 CONFIGURANDO LOG DE OPENVPN..."
-            echo ""
-            echo "Para habilitar el log de estado de OpenVPN en OpenWRT:"
-            echo ""
-            echo "1. Edita /etc/config/openvpn"
-            echo "2. Añade esta línea en cada sección de servidor:"
-            echo "   option status '/var/log/openvpn-status.log'"
-            echo "3. Reinicia OpenVPN:"
-            echo "   /etc/init.d/openvpn restart"
-            echo ""
-            echo "💡 Alternativa temporal (solo esta sesión):"
-            echo "   killall openvpn"
-            echo "   openvpn --config /etc/openvpn/server.conf --status /var/log/openvpn-status.log 10"
-            ;;
-        
-        3)
-            echo ""
-            echo "💾 HACIENDO REGLAS PERSISTENTES..."
-            echo ""
-            
-            # Crear script de inicio
-            cat > /etc/init.d/firewall-custom << 'FIREWALL_SCRIPT'
-#!/bin/sh /etc/rc.common
-
-START=99
-STOP=10
-
-start() {
-    echo "Cargando reglas bloqueadas de OpenVPN..."
-    if [ -f "/etc/openvpn/blocked_ips.txt" ]; then
-        while IFS=: read -r ip cliente fecha; do
-            iptables -I INPUT -s "$ip" -j DROP
-        done < /etc/openvpn/blocked_ips.txt
-        echo "Reglas cargadas"
-    fi
-}
-
-stop() {
-    echo "Eliminando reglas custom..."
-    # No hacemos nada al parar
-}
-FIREWALL_SCRIPT
-            
-            chmod +x /etc/init.d/firewall-custom
-            /etc/init.d/firewall-custom enable
-            
-            echo "✅ Script de persistencia creado"
-            echo "   Las reglas se cargarán al reiniciar"
-            ;;
-        
-        4)
-            echo ""
-            echo "🔄 REINICIANDO SERVICIOS..."
-            /etc/init.d/openvpn restart
-            /etc/init.d/network restart
-            echo "✅ Servicios reiniciados"
-            ;;
-        
-        5)
-            return
-            ;;
-        
-        *)
-            echo "❌ Opción inválida"
-            ;;
-    esac
+    ips_count=$(wc -l < "$IP_HISTORY_FILE" 2>/dev/null || echo 0)
+    echo "   📍 IPs registradas: $ips_count"
+    
+    bloqueados_count=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
+    echo "   🚫 Clientes bloqueados: $bloqueados_count"
 }
 
 # Menú principal
@@ -868,8 +721,7 @@ while true; do
         5) bloqueo_profundo ;;
         6) gestionar_nombres ;;
         7) estado_servicio ;;
-        8) configurar_openwrt ;;
-        9)
+        8)
             echo ""
             echo "👋 Saliendo..."
             exit 0
@@ -880,7 +732,8 @@ while true; do
     esac
     
     echo ""
-    read -p "Presiona Enter para continuar..."
+    echo "Presiona Enter para continuar..."
+    read dummy
 done
 GESTOR_SCRIPT
 
@@ -888,28 +741,18 @@ GESTOR_SCRIPT
 chmod +x /usr/bin/gestor-vpn
 
 echo ""
-echo "✅ INSTALACIÓN COMPLETADA PARA OPENWRT"
+echo "✅ SCRIPT CORREGIDO PARA OPENWRT/ASH"
 echo ""
-echo "🔧 CARACTERÍSTICAS ESPECÍFICAS OPENWRT:"
-echo "   • Compatibilidad con iptables-nft"
-echo "   • Configuración automática de persistencia"
-echo "   • Menú de configuración OpenWRT (opción 8)"
-echo "   • Detección de rutas OpenWRT"
+echo "🔧 CAMBIOS REALIZADOS:"
+echo "   • Eliminado Process Substitution (< <(...))"
+echo "   • Sintaxis compatible con ash (shell de OpenWRT)"
+echo "   • Métodos alternativos para bucles"
+echo "   • Validación de IP más simple"
 echo ""
 echo "🚀 PARA EJECUTAR:"
 echo "   gestor-vpn"
 echo ""
-echo "📋 PASOS INICIALES EN OPENWRT:"
-echo "   1. Si no tienes iptables: opción 8 → opción 1"
-echo "   2. Para habilitar logs OpenVPN: opción 8 → opción 2"
-echo "   3. Para persistencia: opción 8 → opción 3"
-echo ""
-echo "💡 PRIMERA PRUEBA:"
-echo "   gestor-vpn"
-echo "   → Opción 6 (asignar nombres)"
-echo "   → Opción 1 (ver conectados - puede estar vacío al inicio)"
-echo "   → Opción 2 (listar clientes)"
-echo ""
-echo "⚠️  NOTA: En OpenWRT, el archivo de estado de OpenVPN"
-echo "   (/var/log/openvpn-status.log) puede no existir por defecto."
-echo "   Usa la opción 8 del menú para configurarlo."
+echo "💡 PRUEBA RÁPIDA:"
+echo "   1. Asigna un nombre: echo 'client1:Juan' >> /etc/openvpn/clientes/nombres.txt"
+echo "   2. Añade IPs: echo 'client1:192.168.1.100:\$(date)' >> /etc/openvpn/clientes/ip_history.txt"
+echo "   3. Ejecuta: gestor-vpn"
