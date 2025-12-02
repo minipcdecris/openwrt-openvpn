@@ -199,7 +199,7 @@ ver_conectados() {
         
         if [ -n "$cliente" ] && [ "$ip_externa" != "UNDEF" ]; then
             cliente_limpio=$(limpiar_nombre "$cliente")
-            nombre_descriptivo=$(obtener_nombre "$cliente"))
+            nombre_descriptivo=$(obtener_nombre "$cliente")
             
             # Registrar IP automáticamente
             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -685,9 +685,6 @@ desbloquear_cliente() {
     echo "   📝 Certificado: RESTAURADO (si era posible)"
 }
 
-# (Las funciones gestionar_nombres, registrar_ip_manual, estado_servicio se mantienen igual)
-# [Pegar aquí las funciones existentes sin cambios...]
-
 # Función para gestionar nombres
 gestionar_nombres() {
     while true; do
@@ -758,7 +755,7 @@ gestionar_nombres() {
                     echo "   📭 No hay nombres para eliminar"
                     continue
                 fi
-                
+    
                 echo "Selecciona nombre a eliminar:"
                 echo ""
                 num=0
