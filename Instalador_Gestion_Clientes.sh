@@ -4,7 +4,11 @@ echo ""
 echo "🔧 ACTUALIZANDO SISTEMA - SOLO BLOQUEO POR NOMBRE"
 echo "================================================="
 
-# Actualizar el script
+# Primero, crear directorios necesarios
+mkdir -p /etc/openvpn/scripts
+mkdir -p /etc/openvpn/clientes
+
+# Crear el script principal
 cat > /usr/bin/gestion << 'EOF'
 #!/bin/sh
 
@@ -167,7 +171,7 @@ configurar_script_verificacion() {
     echo "   🔄 Configurando verificación en OpenVPN..."
     
     # Crear script de verificación
-    cat > /etc/openvpn/scripts/verificar_cliente.sh << 'EOF'
+    cat > /etc/openvpn/scripts/verificar_cliente.sh << 'SCRIPT_EOF'
 #!/bin/sh
 # Script para verificar si cliente está bloqueado por nombre
 # Se ejecuta en cada conexión mediante client-connect
@@ -188,7 +192,7 @@ fi
 
 # Permitir conexión
 exit 0
-EOF
+SCRIPT_EOF
     
     chmod +x /etc/openvpn/scripts/verificar_cliente.sh
     escribir_log "✅ Script de verificación creado/actualizado"
@@ -503,7 +507,6 @@ bloquear_cliente() {
     fi
     
     # Crear lista de clientes
-    clientes_lista=""
     if [ -n "$EASYRSA_DIR" ] && [ -f "$EASYRSA_DIR/pki/index.txt" ]; then
         grep "^V" "$EASYRSA_DIR/pki/index.txt" 2>/dev/null | while read linea; do
             if echo "$linea" | grep -q "/CN="; then
@@ -744,7 +747,6 @@ gestionar_nombres() {
                 echo ""
                 echo "📋 NOMBRES ASIGNADOS:"
                 echo ""
-                escribir_log "📋 Mostrando nombres asignados"
                 if [ -s "$NOMBRES_FILE" ]; then
                     while IFS=: read -r cliente nombre; do
                         echo "   🏷️  $nombre ($cliente)"
@@ -1013,8 +1015,40 @@ while true; do
 done
 EOF
 
-# Dar permisos
+# Dar permisos al script principal
 chmod +x /usr/bin/gestion
+
+# Crear el script de verificación por separado (esto es lo que faltaba)
+cat > /etc/openvpn/scripts/verificar_cliente.sh << 'EOF'
+#!/bin/sh
+# Script para verificar si cliente está bloqueado por nombre
+# Se ejecuta en cada conexión mediante client-connect
+
+CLIENT_NAME="$1"
+SUSPENDED_FILE="/etc/openvpn/clientes/suspended.txt"
+
+# Limpiar nombre (quitar /CN= si existe)
+CLIENT_CLEAN=$(echo "$CLIENT_NAME" | sed 's|/CN=||')
+
+# Verificar si está en lista de bloqueados
+if grep -q "^$CLIENT_CLEAN:" "$SUSPENDED_FILE"; then
+    # Registrar intento bloqueado
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Conexión BLOQUEADA: $CLIENT_CLEAN" >> /etc/openvpn/clientes/conexiones_bloqueadas.log
+    # Rechazar conexión
+    exit 1
+fi
+
+# Permitir conexión
+exit 0
+EOF
+
+# Dar permisos al script de verificación
+chmod +x /etc/openvpn/scripts/verificar_cliente.sh
+
+# Crear archivos necesarios
+touch /etc/openvpn/clientes/nombres.txt
+touch /etc/openvpn/clientes/suspended.txt
+touch /etc/openvpn/clientes/vpn_gestion.log
 
 echo ""
 echo "✅ SISTEMA ACTUALIZADO - SOLO BLOQUEO POR NOMBRE"
@@ -1022,7 +1056,7 @@ echo ""
 echo "🔧 CAMBIOS PRINCIPALES:"
 echo "   1. 🚫 ELIMINADO todo bloqueo por IP"
 echo "   2. ✅ IMPLEMENTADO bloqueo por nombre (Common Name)"
-echo "   3. 🔄 Configuración automática de OpenVPN"
+echo "   3. 🔄 Script de verificación creado en /etc/openvpn/scripts/"
 echo "   4. 📋 Sistema simplificado y más efectivo"
 echo ""
 echo "🎯 VENTAJAS DEL NUEVO SISTEMA:"
@@ -1036,6 +1070,11 @@ echo "   1. Ejecuta: gestion"
 echo "   2. Usa opción 3 para bloquear por nombre"
 echo "   3. El script configurará OpenVPN automáticamente"
 echo ""
-echo "💡 RECOMENDACIÓN:"
-echo "   Verifica que OpenVPN esté instalado y funcionando"
-echo "   Si tienes problemas, revisa: /etc/openvpn/server.conf"
+echo "🔧 CONFIGURACIÓN OPCIONAL:"
+echo "   Si OpenVPN no se configura automáticamente, añade manualmente a"
+echo "   /etc/openvpn/server.conf:"
+echo ""
+echo "   script-security 2"
+echo "   client-connect /etc/openvpn/scripts/verificar_cliente.sh"
+echo ""
+echo "💡 LISTO! Ejecuta 'gestion' para comenzar a usar el sistema."
