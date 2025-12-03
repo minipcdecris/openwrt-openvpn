@@ -266,20 +266,7 @@ ver_conectados() {
         fi
     done
     
-    echo "│                    RESUMEN FINAL                         │"
-    echo "├─────────────────────────────────────────────────────────┤"
-    
-    if [ $contador -eq 0 ]; then
-        echo "│ ℹ️  No se encontraron clientes conectados              │"
-    else
-        echo "│ ✅ Total de clientes conectados: $contador               │"
-        # Mostrar estadísticas adicionales
-        echo "│ 📊 IPs registradas en historial: $contador              │"
-        escribir_log "📊 Mostrados $contador clientes conectados, IPs registradas"
-    fi
-    
-    echo "└─────────────────────────────────────────────────────────┘"
-    echo ""
+   
     
     if [ $contador -gt 0 ]; then
         echo "💡 Las IPs se han registrado automáticamente en el historial"
