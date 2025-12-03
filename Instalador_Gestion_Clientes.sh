@@ -17,3 +17,19 @@ if [ -f "$FILE" ]; then
 else
     echo "❌ Archivo no encontrado"
 fi
+# Comando de prueba directa
+echo "=== PRUEBA DIRECTA ==="
+FILE="/var/log/openvpn-status.log"
+if [ -f "$FILE" ]; then
+    echo "Clientes encontrados en $FILE:"
+    echo ""
+    grep "^CLIENT_LIST" "$FILE" | grep -v "UNDEF" | while read line; do
+        cliente=$(echo "$line" | awk '{print $2}')
+        ip=$(echo "$line" | awk '{print $3}')
+        fecha=$(echo "$line" | awk '{print $7}')
+        hora=$(echo "$line" | awk '{print $8}')
+        echo "✅ $cliente desde $ip - $fecha $hora"
+    done
+else
+    echo "Archivo no encontrado"
+fi
