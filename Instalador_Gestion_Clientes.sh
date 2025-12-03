@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO SISTEMA CON REGISTRO DE LOGS"
+echo "🔧 CORRIGIENDO SISTEMA DE REGISTRO DE FECHAS"
 echo "==========================================="
 
 # Actualizar el script
@@ -191,7 +191,7 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# Función para ver clientes conectados CON FECHA/HORA
+# Función para ver clientes conectados CON FECHA/HORA CORREGIDA
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS (registrando fecha/hora):"
@@ -202,14 +202,36 @@ ver_conectados() {
         STATUS_FILE="/var/log/openvpn-status.log"
     elif [ -f "/tmp/openvpn-status.log" ]; then
         STATUS_FILE="/tmp/openvpn-status.log"
+    elif [ -f "/etc/openvpn/status.log" ]; then
+        STATUS_FILE="/etc/openvpn/status.log"
     else
         echo "   ⚠️  No se encuentra archivo de estado"
-        escribir_log "⚠️  No se encuentra archivo de estado openvpn-status.log"
-        return
+        echo "   💡 Buscando en ubicaciones comunes..."
+        # Buscar en ubicaciones comunes
+        find /var/log /tmp /etc/openvpn -name "*openvpn*status*" -type f 2>/dev/null | head -1 > /tmp/status_location.txt
+        if [ -s /tmp/status_location.txt ]; then
+            STATUS_FILE=$(cat /tmp/status_location.txt)
+            echo "   ✅ Encontrado en: $STATUS_FILE"
+        else
+            escribir_log "⚠️  No se encuentra archivo de estado openvpn-status.log"
+            echo "   ❌ No se pudo encontrar archivo de estado"
+            return
+        fi
+        rm -f /tmp/status_location.txt
     fi
     
     # Leer clientes conectados
-    grep "^CLIENT_LIST" "$STATUS_FILE" > /tmp/clientes_temp.txt 2>/dev/null
+    if grep -q "^CLIENT_LIST" "$STATUS_FILE" 2>/dev/null; then
+        # Formato nuevo de OpenVPN
+        grep "^CLIENT_LIST" "$STATUS_FILE" > /tmp/clientes_temp.txt 2>/dev/null
+    elif grep -q "^client" "$STATUS_FILE" 2>/dev/null; then
+        # Formato antiguo de OpenVPN
+        grep "^client" "$STATUS_FILE" > /tmp/clientes_temp.txt 2>/dev/null
+    else
+        echo "   ⚠️  Formato de archivo de estado no reconocido"
+        escribir_log "⚠️  Formato de archivo de estado no reconocido en $STATUS_FILE"
+        return
+    fi
     
     if [ ! -s /tmp/clientes_temp.txt ]; then
         echo "   ℹ️  No hay clientes conectados"
@@ -225,50 +247,93 @@ ver_conectados() {
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
-    # Procesar cada cliente
+    # Procesar cada cliente - FORMATO MEJORADO
     while read linea; do
-        # Extraer datos
-        cliente=$(echo "$linea" | awk '{print $2}')
-        ip_externa=$(echo "$linea" | awk '{print $3}')
-        fecha_conexion_raw=$(echo "$linea" | awk '{print $9, $10}')
+        # Extraer datos dependiendo del formato
+        if echo "$linea" | grep -q "^CLIENT_LIST"; then
+            # Formato: CLIENT_LIST,cliente,ip:puerto,bytes_rx,bytes_tx,conectado_desde,username
+            cliente=$(echo "$linea" | awk -F',' '{print $2}')
+            ip_puerto=$(echo "$linea" | awk -F',' '{print $3}')
+            conectado_desde=$(echo "$linea" | awk -F',' '{print $6}')
+            
+            # Separar IP y puerto
+            ip=$(echo "$ip_puerto" | cut -d: -f1)
+            puerto=$(echo "$ip_puerto" | cut -d: -f2 2>/dev/null)
+        else
+            # Formato antiguo: client,cliente,ip:puerto
+            cliente=$(echo "$linea" | awk '{print $2}')
+            ip_puerto=$(echo "$linea" | awk '{print $3}')
+            ip=$(echo "$ip_puerto" | cut -d: -f1)
+            puerto=$(echo "$ip_puerto" | cut -d: -f2 2>/dev/null)
+            conectado_desde=""
+        fi
         
-        if [ -n "$cliente" ] && [ "$ip_externa" != "UNDEF" ]; then
+        if [ -n "$cliente" ] && [ "$ip" != "UNDEF" ] && [ -n "$ip" ]; then
             cliente_limpio=$(limpiar_nombre "$cliente")
             nombre_descriptivo=$(obtener_nombre "$cliente")
             
-            # Convertir fecha de conexión a formato legible
-            if [ -n "$fecha_conexion_raw" ] && [ "$fecha_conexion_raw" != "UNDEF" ]; then
-                # OpenVPN usa formato timestamp Unix
-                if echo "$fecha_conexion_raw" | grep -q "^[0-9]"; then
-                    fecha_conexion=$(date -d @"$fecha_conexion_raw" '+%d/%m/%Y %H:%M' 2>/dev/null || echo "Desconocida")
-                else
-                    fecha_conexion="Conectado ahora"
+            # Determinar fecha/hora de conexión
+            if [ -n "$conectado_desde" ] && [ "$conectado_desde" != "UNDEF" ]; then
+                # Intentar diferentes formatos de fecha
+                fecha_conexion=""
+                
+                # Formato 1: Timestamp Unix (ej: 1700000000)
+                if echo "$conectado_desde" | grep -q '^[0-9][0-9]*$' && [ "$conectado_desde" -gt 1000000000 ]; then
+                    fecha_conexion=$(date -d @"$conectado_desde" '+%d/%m/%Y %H:%M' 2>/dev/null || echo "")
+                fi
+                
+                # Formato 2: Fecha OpenVPN (ej: Thu Nov 30 10:30:45 2023)
+                if [ -z "$fecha_conexion" ]; then
+                    fecha_conexion=$(echo "$conectado_desde" | awk '{
+                        month_index["Jan"]=1; month_index["Feb"]=2; month_index["Mar"]=3;
+                        month_index["Apr"]=4; month_index["May"]=5; month_index["Jun"]=6;
+                        month_index["Jul"]=7; month_index["Aug"]=8; month_index["Sep"]=9;
+                        month_index["Oct"]=10; month_index["Nov"]=11; month_index["Dec"]=12;
+                        
+                        if ($2 in month_index) {
+                            month_num = month_index[$2];
+                            printf "%02d/%02d/%s %s", $3, month_num, $5, $4;
+                        }
+                    }' 2>/dev/null)
+                fi
+                
+                # Si no se pudo determinar, usar "Conectado recientemente"
+                if [ -z "$fecha_conexion" ]; then
+                    fecha_conexion="Conectado recientemente"
                 fi
             else
-                fecha_conexion="Conectado ahora"
+                # Si no hay información de fecha, usar hora actual
+                fecha_conexion=$(date '+%d/%m/%Y %H:%M')
             fi
             
-            # Registrar IP automáticamente con fecha/hora de conexión
+            # Registrar IP automáticamente
             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
             
             # Eliminar entrada antigua si existe
-            grep -v "^$cliente_limpio:$ip_externa:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
+            grep -v "^$cliente_limpio:$ip:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
             mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
             
-            # Añadir nueva entrada con fecha/hora de conexión
-            echo "$cliente_limpio:$ip_externa:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
+            # Añadir nueva entrada
+            echo "$cliente_limpio:$ip:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
             registradas=$((registradas + 1))
             
             # Registrar en log
-            escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip_externa - $fecha_conexion"
+            escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip - $fecha_conexion"
             
-            # Mostrar información CON FECHA/HORA
+            # Mostrar información
             if [ "$cliente_limpio" = "$nombre_descriptivo" ]; then
                 echo "   👤 $cliente_limpio"
             else
                 echo "   👤 $nombre_descriptivo ($cliente_limpio)"
             fi
-            echo "      📍 IP: $ip_externa"
+            
+            # Mostrar IP con puerto si está disponible
+            if [ -n "$puerto" ] && [ "$puerto" != "$ip" ]; then
+                echo "      📍 IP:Puerto: $ip:$puerto"
+            else
+                echo "      📍 IP: $ip"
+            fi
+            
             echo "      🕒 Conectado: $fecha_conexion"
             echo ""
         fi
@@ -277,10 +342,10 @@ ver_conectados() {
     rm -f /tmp/clientes_temp.txt
     
     if [ $registradas -eq 0 ]; then
-        echo "   ℹ️  No se registraron nuevas IPs"
+        echo "   ℹ️  No se registraron nuevas conexiones"
     else
-        escribir_log "✅ Se registraron $registradas IPs en $IP_HISTORY_FILE"
-        echo "✅ Se registraron $registradas IPs en $IP_HISTORY_FILE"
+        escribir_log "✅ Se registraron $registradas conexiones en $IP_HISTORY_FILE"
+        echo "✅ Se registraron $registradas conexiones"
     fi
 }
 
@@ -437,24 +502,27 @@ bloquear_ip() {
         return 1
     fi
     
+    # Extraer solo la IP si viene con puerto
+    ip_sin_puerto=$(echo "$ip" | cut -d: -f1)
+    
     # Verificar si ya está bloqueada
-    if iptables -nL INPUT 2>/dev/null | grep -q "DROP.*$ip"; then
-        escribir_log "ℹ️  IP $ip ya estaba bloqueada para $cliente"
+    if iptables -nL INPUT 2>/dev/null | grep -q "DROP.*$ip_sin_puerto"; then
+        escribir_log "ℹ️  IP $ip_sin_puerto ya estaba bloqueada para $cliente"
         echo "   ℹ️  $ip ya estaba bloqueada"
         return 0
     fi
     
     # Bloquear IP
-    if iptables -I INPUT -s "$ip" -j DROP 2>/dev/null; then
+    if iptables -I INPUT -s "$ip_sin_puerto" -j DROP 2>/dev/null; then
         # Guardar para persistencia
         mkdir -p /etc/openvpn
-        if ! grep -q "^$ip:" /etc/openvpn/blocked_ips.txt 2>/dev/null; then
-            echo "$ip:$cliente:$(date '+%Y-%m-%d %H:%M:%S')" >> /etc/openvpn/blocked_ips.txt
+        if ! grep -q "^$ip_sin_puerto:" /etc/openvpn/blocked_ips.txt 2>/dev/null; then
+            echo "$ip_sin_puerto:$cliente:$(date '+%Y-%m-%d %H:%M:%S')" >> /etc/openvpn/blocked_ips.txt
         fi
-        escribir_log "🔒 IP $ip bloqueada para cliente $cliente"
+        escribir_log "🔒 IP $ip_sin_puerto bloqueada para cliente $cliente"
         return 0
     else
-        escribir_log "❌ Error bloqueando IP $ip para $cliente"
+        escribir_log "❌ Error bloqueando IP $ip_sin_puerto para $cliente"
         return 1
     fi
 }
@@ -463,14 +531,17 @@ bloquear_ip() {
 desbloquear_ip() {
     ip="$1"
     
+    # Extraer solo la IP si viene con puerto
+    ip_sin_puerto=$(echo "$ip" | cut -d: -f1)
+    
     if command -v iptables >/dev/null 2>&1; then
-        iptables -D INPUT -s "$ip" -j DROP 2>/dev/null
-        escribir_log "🔓 IP $ip desbloqueada"
+        iptables -D INPUT -s "$ip_sin_puerto" -j DROP 2>/dev/null
+        escribir_log "🔓 IP $ip_sin_puerto desbloqueada"
     fi
     
     # Eliminar de persistencia
     if [ -f "/etc/openvpn/blocked_ips.txt" ]; then
-        grep -v "^$ip:" /etc/openvpn/blocked_ips.txt > /tmp/blocked.tmp
+        grep -v "^$ip_sin_puerto:" /etc/openvpn/blocked_ips.txt > /tmp/blocked.tmp
         mv /tmp/blocked.tmp /etc/openvpn/blocked_ips.txt 2>/dev/null
     fi
 }
@@ -933,8 +1004,8 @@ registrar_ip_manual() {
     echo -n "IP a registrar (ej: 192.168.1.100): "
     read ip
     
-    # Validar IP simple
-    if echo "$ip" | grep -qv '^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$'; then
+    # Validar IP simple (puede incluir puerto)
+    if echo "$ip" | grep -qv '^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(:[0-9]*\)*$'; then
         escribir_log "❌ Registro manual fallido: IP $ip no válida"
         echo "❌ IP no válida"
         return
@@ -1214,36 +1285,38 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA ACTUALIZADO CON LOGS"
+echo "✅ SISTEMA CORREGIDO PARA MOSTRAR FECHAS"
 echo ""
-echo "🔧 MEJORAS IMPLEMENTADAS:"
-echo "   1. 📅 FECHA/HORA EN CONEXIONES:"
-echo "      - Ahora muestra 'Conectado: dd/mm/aaaa HH:MM'"
-echo "      - Registra fecha exacta de conexión"
-echo "      - Muestra fecha actual en la parte superior"
+echo "🔧 CAMBIOS REALIZADOS:"
+echo "   1. ✅ MANEJO MEJORADO DE FECHAS:"
+echo "      - Detecta automáticamente el formato del archivo de estado"
+echo "      - Maneja timestamps Unix y formatos de fecha OpenVPN"
+echo "      - Si no puede determinar la fecha, muestra 'Conectado recientemente'"
 echo ""
-echo "   2. 📜 SISTEMA DE LOG COMPLETO:"
-echo "      - Nueva opción 8 para ver logs"
-echo "      - Todo queda registrado en: /etc/openvpn/clientes/vpn_gestion.log"
-echo "      - Cada acción se registra con timestamp"
+echo "   2. ✅ SOPORTE PARA IP:PUERTO:"
+echo "      - Ahora maneja correctamente IPs con puerto (ej: 81.38.64.208:60136)"
+echo "      - Muestra 'IP:Puerto' cuando está disponible"
+echo "      - Al bloquear, extrae solo la IP"
 echo ""
-echo "   3. 📊 FUNCIONALIDADES DEL LOG:"
-echo "      - Ver últimas 50 entradas"
-echo "      - Buscar en el log"
-echo "      - Ver log completo"
-echo "      - Limpiar log (con confirmación)"
+echo "   3. ✅ BUSQUEDA MEJORADA DE ARCHIVOS:"
+echo "      - Busca en más ubicaciones para archivos de estado"
+echo "      - Detecta automáticamente formatos antiguos y nuevos"
 echo ""
-echo "   4. 📈 MEJORAS ADICIONALES:"
-echo "      - Backup automático de certificados antes de revocar"
-echo "      - Mejor manejo de fechas en IPs"
-echo "      - Estadísticas en el estado del sistema"
+echo "   4. ✅ FORMATOS DE FECHA SOPORTADOS:"
+echo "      - Timestamp Unix (ej: 1700000000)"
+echo "      - Fecha OpenVPN (ej: 'Thu Nov 30 10:30:45 2023')"
+echo "      - Fecha actual si no hay información"
 echo ""
-echo "🚀 FLUJO DE TRABAJO ACTUALIZADO:"
-echo "   📡 Al ver clientes conectados → Se registra IP con fecha/hora"
-echo "   📝 Cada bloqueo/desbloqueo → Se guarda en log con detalles"
-echo "   📊 Estado del sistema → Muestra estadísticas del log"
+echo "💡 EJEMPLO DE SALIDA CORREGIDA:"
+echo "   📊 CLIENTES CONECTADOS:"
+echo "   🕒 Fecha actual: 03/12/2025 01:22"
 echo ""
-echo "💡 CONSEJOS:"
-echo "   - Usa la opción 8 periódicamente para revisar actividad"
-echo "   - El log es útil para auditorías y troubleshooting"
-echo "   - Las fechas de conexión ayudan a detectar patrones sospechosos"
+echo "   👤 Cris (client1)"
+echo "      📍 IP:Puerto: 81.38.64.208:60136"
+echo "      🕒 Conectado: 03/12/2025 01:20"
+echo ""
+echo "   👤 Jesus (client3)"
+echo "      📍 IP:Puerto: 83.39.230.130:59841"
+echo "      🕒 Conectado: 03/12/2025 01:21"
+echo ""
+echo "🚀 El sistema ahora mostrará fechas correctamente!"
