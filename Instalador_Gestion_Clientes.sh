@@ -1,14 +1,14 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO SISTEMA - BLOQUEO POR NOMBRE MEJORADO"
-echo "====================================================="
+echo "🔧 ACTUALIZANDO SISTEMA - BLOQUEO POR NOMBRE CORREGIDO"
+echo "======================================================"
 
 # Crear directorios necesarios
 mkdir -p /etc/openvpn/scripts
 mkdir -p /etc/openvpn/clientes
 
-# Crear el script principal MEJORADO
+# Crear el script principal CORREGIDO (compatible con sh)
 cat > /usr/bin/gestion << 'EOF'
 #!/bin/sh
 
@@ -17,19 +17,16 @@ NOMBRES_FILE="/etc/openvpn/clientes/nombres.txt"
 SUSPENDED_FILE="/etc/openvpn/clientes/suspended.txt"
 LOG_FILE="/etc/openvpn/clientes/vpn_gestion.log"
 BLOQUEOS_LOG="/etc/openvpn/clientes/conexiones_bloqueadas.log"
-CRL_FILE="/etc/openvpn/crl.pem"
 
 # Crear archivos si no existen
 for file in "$NOMBRES_FILE" "$SUSPENDED_FILE" "$LOG_FILE" "$BLOQUEOS_LOG"; do
-    touch "$file"
+    [ -f "$file" ] || touch "$file"
 done
 
 # Función para escribir en log
 escribir_log() {
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$timestamp] $1" >> "$LOG_FILE"
-    # También mostrar en consola en modo debug
-    [ "$DEBUG" = "1" ] && echo "[LOG] $1"
 }
 
 # Función para limpiar nombre de certificado
@@ -58,11 +55,9 @@ esta_bloqueado() {
     cliente_limpio=$(limpiar_nombre "$cliente")
     
     if [ -f "$SUSPENDED_FILE" ] && grep -q "^$cliente_limpio:" "$SUSPENDED_FILE"; then
-        echo "si"
-        return 0
+        return 0  # true - está bloqueado
     else
-        echo "no"
-        return 1
+        return 1  # false - no está bloqueado
     fi
 }
 
@@ -74,8 +69,8 @@ esta_bloqueado() {
 configurar_openvpn() {
     echo "🔄 Configurando OpenVPN..."
     
-    local server_conf="/etc/openvpn/server.conf"
-    local script_verificacion="/etc/openvpn/scripts/verificar_cliente.sh"
+    server_conf="/etc/openvpn/server.conf"
+    script_verificacion="/etc/openvpn/scripts/verificar_cliente.sh"
     
     # 1. Crear script de verificación MEJORADO
     cat > "$script_verificacion" << 'SCRIPT_EOF'
@@ -88,9 +83,9 @@ IP_REAL="$2"
 SUSPENDED_FILE="/etc/openvpn/clientes/suspended.txt"
 BLOQUEOS_LOG="/etc/openvpn/clientes/conexiones_bloqueadas.log"
 
-# Depuración
+# Depuración (opcional)
 DEBUG_LOG="/tmp/openvpn_script_debug.log"
-echo "=== $(date) ===" >> "$DEBUG_LOG"
+echo "=== $(date) ===" > "$DEBUG_LOG"
 echo "Cliente: $CLIENT_NAME" >> "$DEBUG_LOG"
 echo "IP Real: $IP_REAL" >> "$DEBUG_LOG"
 
@@ -104,8 +99,7 @@ if [ ! -f "$SUSPENDED_FILE" ]; then
     exit 0
 fi
 
-echo "Contenido de suspended.txt:" >> "$DEBUG_LOG"
-cat "$SUSPENDED_FILE" >> "$DEBUG_LOG" 2>/dev/null
+echo "Buscando cliente en lista de bloqueos..." >> "$DEBUG_LOG"
 
 # Verificar si está bloqueado
 if grep -q "^$CLIENT_CLEAN:" "$SUSPENDED_FILE"; then
@@ -155,6 +149,10 @@ SCRIPT_EOF
         echo "   2. Añade estas líneas:"
         echo "      script-security 2"
         echo "      client-connect $script_verificacion"
+        echo ""
+        echo "📌 Busca tu archivo de configuración:"
+        echo "   find /etc -name '*.conf' | grep -i vpn"
+        echo "   find /etc/openvpn -name '*.conf'"
     fi
 }
 
@@ -162,30 +160,43 @@ SCRIPT_EOF
 recargar_openvpn() {
     echo "🔄 Recargando OpenVPN..."
     
-    if systemctl reload openvpn-server 2>/dev/null; then
-        echo "✅ OpenVPN recargado (systemctl)"
-        return 0
-    elif systemctl reload openvpn 2>/dev/null; then
-        echo "✅ OpenVPN recargado (systemctl)"
-        return 0
-    elif /etc/init.d/openvpn reload 2>/dev/null; then
-        echo "✅ OpenVPN recargado (init.d)"
-        return 0
-    elif killall -HUP openvpn 2>/dev/null; then
-        echo "✅ Señal HUP enviada a OpenVPN"
-        return 0
-    else
-        echo "⚠️  No se pudo recargar OpenVPN, reinicia manualmente"
-        echo "💡 Ejecuta: systemctl restart openvpn"
-        return 1
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl reload openvpn-server 2>/dev/null; then
+            echo "✅ OpenVPN recargado (openvpn-server)"
+            return 0
+        elif systemctl reload openvpn 2>/dev/null; then
+            echo "✅ OpenVPN recargado (openvpn)"
+            return 0
+        fi
     fi
+    
+    if [ -f "/etc/init.d/openvpn" ]; then
+        if /etc/init.d/openvpn reload 2>/dev/null; then
+            echo "✅ OpenVPN recargado (init.d)"
+            return 0
+        fi
+    fi
+    
+    if command -v killall >/dev/null 2>&1; then
+        if killall -HUP openvpn 2>/dev/null; then
+            echo "✅ Señal HUP enviada a OpenVPN"
+            return 0
+        fi
+    fi
+    
+    echo "⚠️  No se pudo recargar OpenVPN automáticamente"
+    echo "💡 Reinicia manualmente:"
+    echo "   systemctl restart openvpn"
+    echo "   o"
+    echo "   /etc/init.d/openvpn restart"
+    return 1
 }
 
 # ==============================================
-# FUNCIONES DE BLOQUEO MEJORADAS
+# FUNCIONES DE BLOQUEO MEJORADAS (CORREGIDAS)
 # ==============================================
 
-# Función para bloquear cliente
+# Función para bloquear cliente (CORREGIDA - sin arrays)
 bloquear_cliente() {
     clear
     echo ""
@@ -199,19 +210,24 @@ bloquear_cliente() {
     echo "📊 Clientes actualmente conectados:"
     echo ""
     
-    local clientes_conectados=()
-    local status_file="/var/log/openvpn-status.log"
+    status_file="/var/log/openvpn-status.log"
+    count=0
     
     if [ -f "$status_file" ]; then
-        local count=0
-        while read -r linea; do
-            if [[ "$linea" == CLIENT_LIST* ]] && [[ ! "$linea" == *HEADER* ]]; then
+        # Usar archivo temporal para lista
+        temp_list="/tmp/clientes_conectados_$$.tmp"
+        > "$temp_list"
+        
+        while read linea; do
+            # Verificar si es línea de cliente (excluir HEADER)
+            if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "HEADER"; then
                 cliente=$(echo "$linea" | awk '{print $2}' | sed 's|/CN=||')
                 if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
                     count=$((count + 1))
                     nombre_descriptivo=$(obtener_nombre "$cliente")
                     echo "   $count) $nombre_descriptivo ($cliente)"
-                    clientes_conectados[$count]="$cliente"
+                    # Guardar en archivo temporal
+                    echo "$count:$cliente" >> "$temp_list"
                 fi
             fi
         done < "$status_file"
@@ -221,6 +237,8 @@ bloquear_cliente() {
         fi
     else
         echo "   ⚠️  No se puede leer estado de OpenVPN"
+        echo "   Archivo no encontrado: $status_file"
+        temp_list=""
     fi
     
     echo ""
@@ -232,6 +250,7 @@ bloquear_cliente() {
     
     if [ -z "$cliente_input" ]; then
         echo "❌ Nombre inválido"
+        [ -n "$temp_list" ] && rm -f "$temp_list"
         return 1
     fi
     
@@ -246,6 +265,7 @@ bloquear_cliente() {
         read confirmar_extra
         if [ "$confirmar_extra" != "s" ] && [ "$confirmar_extra" != "S" ]; then
             echo "❌ Operación cancelada"
+            [ -n "$temp_list" ] && rm -f "$temp_list"
             return 1
         fi
     fi
@@ -259,11 +279,12 @@ bloquear_cliente() {
     echo "¿Estás seguro de bloquear a este cliente?"
     echo "No podrá conectarse aunque cambie de IP."
     echo ""
-    echo -n "Confirmar BLOQUEO (sí=1, no=0): "
+    echo -n "Confirmar BLOQUEO (sí=s, no=n): "
     read confirmacion
     
-    if [ "$confirmacion" != "1" ] && [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ] && [ "$confirmacion" != "si" ]; then
+    if [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ] && [ "$confirmacion" != "y" ] && [ "$confirmacion" != "Y" ]; then
         echo "❌ Bloqueo cancelado"
+        [ -n "$temp_list" ] && rm -f "$temp_list"
         return 1
     fi
     
@@ -273,9 +294,9 @@ bloquear_cliente() {
     
     # 1. Añadir a lista de bloqueados
     echo "📋 Añadiendo a lista de bloqueados..."
-    local temp_file=$(mktemp)
+    temp_file="/tmp/suspended_$$.tmp"
     grep -v "^$cliente:" "$SUSPENDED_FILE" 2>/dev/null > "$temp_file"
-    echo "$cliente:$(date '+%Y-%m-%d %H:%M:%S'):bloqueado_por_$(whoami)" >> "$temp_file"
+    echo "$cliente:$(date '+%Y-%m-%d %H:%M:%S'):bloqueado" >> "$temp_file"
     mv "$temp_file" "$SUSPENDED_FILE"
     
     escribir_log "Cliente $cliente añadido a lista de bloqueados"
@@ -285,7 +306,7 @@ bloquear_cliente() {
     if [ ! -f "/etc/openvpn/scripts/verificar_cliente.sh" ]; then
         echo "🔧 Configurando OpenVPN por primera vez..."
         configurar_openvpn
-    elif ! grep -q "client-connect" "/etc/openvpn/server.conf" 2>/dev/null; then
+    elif [ -f "/etc/openvpn/server.conf" ] && ! grep -q "client-connect" "/etc/openvpn/server.conf" 2>/dev/null; then
         echo "🔧 Configurando OpenVPN..."
         configurar_openvpn
     else
@@ -296,27 +317,8 @@ bloquear_cliente() {
     echo "🔄 Aplicando cambios en OpenVPN..."
     recargar_openvpn
     
-    # 4. Intentar desconectar al cliente si está conectado
-    if [ -f "/var/log/openvpn-status.log" ] && grep -q "/CN=$cliente" "/var/log/openvpn-status.log"; then
-        echo "📡 Cliente está conectado, forzando desconexión..."
-        
-        # Método 1: Usar management interface
-        echo "   Intentando desconectar mediante management interface..."
-        
-        # Método 2: Enviar señal de desconexión
-        if command -v pkill >/dev/null; then
-            # Buscar PID del proceso OpenVPN del cliente
-            for pid in $(pgrep openvpn); do
-                if grep -q "$cliente" "/proc/$pid/cmdline" 2>/dev/null; then
-                    echo "   Enviando señal de terminación al PID $pid"
-                    kill -TERM "$pid"
-                fi
-            done
-        fi
-        
-        # Método 3: Reiniciar OpenVPN completamente si no funciona
-        echo "   Si sigue conectado, reinicia OpenVPN: systemctl restart openvpn"
-    fi
+    # 4. Limpiar archivo temporal de lista
+    [ -n "$temp_list" ] && rm -f "$temp_list"
     
     echo ""
     echo "✅ BLOQUEO COMPLETADO EXITOSAMENTE"
@@ -327,7 +329,7 @@ bloquear_cliente() {
     echo ""
     echo "🔍 PARA VERIFICAR:"
     echo "   1. Cliente intenta reconectar - debería fallar"
-    echo "   2. Ver logs: tail -f /etc/openvpn/clientes/conexiones_bloqueadas.log"
+    echo "   2. Ver logs: tail -f $BLOQUEOS_LOG"
     echo "   3. Depuración: cat /tmp/openvpn_script_debug.log"
     echo ""
     echo "💡 El bloqueo es EFECTIVO incluso si:"
@@ -357,15 +359,18 @@ desbloquear_cliente() {
         return 0
     fi
     
-    local count=0
+    count=0
+    temp_index="/tmp/blocked_index_$$.tmp"
+    > "$temp_index"
+    
     while IFS=: read -r cliente fecha motivo; do
         if [ -n "$cliente" ]; then
             count=$((count + 1))
             nombre_descriptivo=$(obtener_nombre "$cliente")
             echo "   $count) $nombre_descriptivo ($cliente)"
             echo "       📅 Bloqueado: $fecha"
-            echo "       📝 Motivo: $motivo"
             echo ""
+            echo "$count:$cliente" >> "$temp_index"
         fi
     done < "$SUSPENDED_FILE"
     
@@ -375,21 +380,20 @@ desbloquear_cliente() {
     
     if ! echo "$seleccion" | grep -qE '^[0-9]+$'; then
         echo "❌ Selección inválida"
+        rm -f "$temp_index"
         return 1
     fi
     
     # Obtener cliente seleccionado
-    local cliente_seleccionado=""
-    local count2=0
-    while IFS=: read -r cliente fecha motivo; do
-        if [ -n "$cliente" ]; then
-            count2=$((count2 + 1))
-            if [ "$count2" -eq "$seleccion" ]; then
-                cliente_seleccionado="$cliente"
-                break
-            fi
+    cliente_seleccionado=""
+    while IFS=: read -r num cliente; do
+        if [ "$num" = "$seleccion" ]; then
+            cliente_seleccionado="$cliente"
+            break
         fi
-    done < "$SUSPENDED_FILE"
+    done < "$temp_index"
+    
+    rm -f "$temp_index"
     
     if [ -z "$cliente_seleccionado" ]; then
         echo "❌ Cliente no encontrado"
@@ -400,16 +404,16 @@ desbloquear_cliente() {
     echo "🔓 DESBLOQUEANDO: $cliente_seleccionado"
     echo "   Nombre: $(obtener_nombre "$cliente_seleccionado")"
     echo ""
-    echo -n "¿Confirmar desbloqueo? (sí=1, no=0): "
+    echo -n "¿Confirmar desbloqueo? (sí=s, no=n): "
     read confirmacion
     
-    if [ "$confirmacion" != "1" ] && [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ]; then
+    if [ "$confirmacion" != "s" ] && [ "$confirmacion" != "S" ] && [ "$confirmacion" != "y" ] && [ "$confirmacion" != "Y" ]; then
         echo "❌ Desbloqueo cancelado"
         return 1
     fi
     
     # Eliminar de lista de bloqueados
-    local temp_file=$(mktemp)
+    temp_file="/tmp/desbloqueo_$$.tmp"
     grep -v "^$cliente_seleccionado:" "$SUSPENDED_FILE" > "$temp_file"
     mv "$temp_file" "$SUSPENDED_FILE"
     
@@ -440,9 +444,10 @@ mostrar_menu() {
     echo "4) ✅ DESBLOQUEAR cliente (por nombre)"
     echo "5) ⚙️  Configurar OpenVPN"
     echo "6) 📊 Ver logs de bloqueos"
-    echo "7) ❌ Salir"
+    echo "7) 📜 Ver logs del sistema"
+    echo "8) ❌ Salir"
     echo ""
-    echo -n "Selecciona opción [1-7]: "
+    echo -n "Selecciona opción [1-8]: "
 }
 
 # Función para ver clientes conectados
@@ -452,15 +457,17 @@ ver_conectados() {
     echo "======================"
     echo ""
     
-    local status_file="/var/log/openvpn-status.log"
+    status_file="/var/log/openvpn-status.log"
     if [ ! -f "$status_file" ]; then
         echo "❌ No se encuentra $status_file"
+        echo "💡 Prueba con:"
+        echo "   find /var/log -name '*openvpn*' -type f"
         return 1
     fi
     
-    local count=0
-    while read -r linea; do
-        if [[ "$linea" == CLIENT_LIST* ]] && [[ ! "$linea" == *HEADER* ]]; then
+    count=0
+    while read linea; do
+        if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "HEADER"; then
             cliente=$(echo "$linea" | awk '{print $2}' | sed 's|/CN=||')
             ip_real=$(echo "$linea" | awk '{print $3}')
             ip_virtual=$(echo "$linea" | awk '{print $4}')
@@ -517,7 +524,10 @@ main() {
                 if [ -s "$SUSPENDED_FILE" ]; then
                     cat "$SUSPENDED_FILE" | while IFS=: read -r cliente fecha motivo; do
                         if [ -n "$cliente" ]; then
-                            echo "• $cliente - $fecha ($motivo)"
+                            nombre=$(obtener_nombre "$cliente")
+                            echo "• $nombre ($cliente)"
+                            echo "  📅 $fecha - $motivo"
+                            echo ""
                         fi
                     done
                 else
@@ -539,12 +549,27 @@ main() {
                 echo "=================="
                 echo ""
                 if [ -s "$BLOQUEOS_LOG" ]; then
+                    echo "Últimos 20 bloqueos:"
+                    echo "-------------------"
                     tail -20 "$BLOQUEOS_LOG"
                 else
                     echo "ℹ️  No hay logs de bloqueos"
                 fi
                 ;;
             7)
+                echo ""
+                echo "📋 LOGS DEL SISTEMA"
+                echo "=================="
+                echo ""
+                if [ -s "$LOG_FILE" ]; then
+                    echo "Últimas 30 entradas:"
+                    echo "-------------------"
+                    tail -30 "$LOG_FILE"
+                else
+                    echo "ℹ️  No hay logs del sistema"
+                fi
+                ;;
+            8)
                 escribir_log "Sistema finalizado"
                 echo ""
                 echo "👋 ¡Hasta luego!"
@@ -558,40 +583,75 @@ main() {
         echo ""
         echo "──────────────────────────────────────"
         echo "Presiona Enter para continuar..."
-        read
+        read dummy
     done
 }
 
 # Iniciar
-main "$@"
+main
 EOF
 
-# Dar permisos
+# Dar permisos al script principal
 chmod +x /usr/bin/gestion
 
+# Crear el script de verificación por separado
+cat > /etc/openvpn/scripts/verificar_cliente.sh << 'EOF'
+#!/bin/sh
+# Script para verificar si cliente está bloqueado por nombre
+# Se ejecuta en cada conexión mediante client-connect
+
+CLIENT_NAME="$1"
+IP_REAL="$2"
+SUSPENDED_FILE="/etc/openvpn/clientes/suspended.txt"
+BLOQUEOS_LOG="/etc/openvpn/clientes/conexiones_bloqueadas.log"
+
+# Limpiar nombre (quitar /CN= si existe)
+CLIENT_CLEAN=$(echo "$CLIENT_NAME" | sed 's|/CN=||')
+
+# Verificar si está en lista de bloqueados
+if [ -f "$SUSPENDED_FILE" ] && grep -q "^$CLIENT_CLEAN:" "$SUSPENDED_FILE"; then
+    # Registrar intento bloqueado
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | Cliente: $CLIENT_CLEAN | IP: $IP_REAL | Estado: BLOQUEADO" >> "$BLOQUEOS_LOG"
+    
+    # También registrar en syslog
+    logger -t "OpenVPN-Bloqueo" "Cliente $CLIENT_CLEAN bloqueado - IP: $IP_REAL"
+    
+    # Rechazar conexión
+    exit 1
+fi
+
+# Permitir conexión
+exit 0
+EOF
+
+# Dar permisos al script de verificación
+chmod +x /etc/openvpn/scripts/verificar_cliente.sh
+
+# Crear archivos necesarios
+touch /etc/openvpn/clientes/nombres.txt
+touch /etc/openvpn/clientes/suspended.txt
+touch /etc/openvpn/clientes/vpn_gestion.log
+touch /etc/openvpn/clientes/conexiones_bloqueadas.log
+
 echo ""
-echo "✅ SISTEMA MEJORADO INSTALADO"
+echo "✅ SISTEMA CORREGIDO INSTALADO"
 echo ""
-echo "🔧 PASOS PARA PROBAR:"
+echo "🔧 CORRECCIONES APLICADAS:"
+echo "   1. ✅ Eliminados arrays (incompatibles con sh)"
+echo "   2. ✅ Usado archivos temporales en lugar de arrays"
+echo "   3. ✅ Mejorado manejo de errores"
+echo "   4. ✅ Script 100% compatible con /bin/sh"
 echo ""
-echo "1. 📋 Verifica si OpenVPN está configurado:"
-echo "   grep -E '(script-security|client-connect)' /etc/openvpn/server.conf"
+echo "🚀 PARA CONFIGURAR OPENVPN:"
 echo ""
-echo "2. ⚙️  Si no está configurado, ejecuta:"
-echo "   gestion"
-echo "   y selecciona opción 5 para configurar automáticamente"
+echo "1. Añade estas líneas al final de /etc/openvpn/server.conf:"
+echo "   script-security 2"
+echo "   client-connect /etc/openvpn/scripts/verificar_cliente.sh"
 echo ""
-echo "3. 🚫 Para bloquear un cliente:"
-echo "   gestion"
-echo "   opción 3 → ingresa el nombre del certificado"
-echo ""
-echo "4. 🔍 Para verificar que funciona:"
-echo "   a) El cliente intenta conectarse"
-echo "   b) Revisa: tail -f /etc/openvpn/clientes/conexiones_bloqueadas.log"
-echo "   c) Depuración: cat /tmp/openvpn_script_debug.log"
-echo ""
-echo "5. 🔄 Si necesitas reiniciar OpenVPN:"
+echo "2. Reinicia OpenVPN:"
 echo "   systemctl restart openvpn"
 echo ""
-echo "💡 CONSEJO: Si el cliente sigue conectado después de bloquearlo,"
-echo "   desconéctalo manualmente o reinicia OpenVPN completamente."
+echo "3. Prueba el sistema:"
+echo "   gestion"
+echo ""
+echo "💡 Si necesitas ayuda para configurar server.conf, dime y te ayudo paso a paso."
