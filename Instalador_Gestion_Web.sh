@@ -14,6 +14,7 @@ cat > /usr/bin/gestion << 'EOF'
 
 # Buscar archivo de bloqueos existente
 find_suspended_file() {
+    # Posibles ubicaciones
     for file in \
         "/etc/openvpn/clientes/suspended.txt" \
         "/etc/openvpn/suspended_clients.txt" \
@@ -25,6 +26,8 @@ find_suspended_file() {
             return 0
         fi
     done
+    
+    # Si no existe, usar la predeterminada
     echo "/etc/openvpn/clientes/suspended.txt"
     return 1
 }
@@ -79,7 +82,7 @@ log() {
 }
 
 esta_bloqueado() {
-    local cliente="$1"
+    cliente="$1"
     if [ -f "$SUSPENDED_FILE" ] && grep -q "^$cliente:" "$SUSPENDED_FILE"; then
         return 0
     else
@@ -88,7 +91,7 @@ esta_bloqueado() {
 }
 
 obtener_nombre() {
-    local cliente="$1"
+    cliente="$1"
     if [ -f "$NOMBRES_FILE" ]; then
         nombre=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2-)
         if [ -n "$nombre" ]; then
@@ -105,8 +108,13 @@ obtener_nombre() {
 
 # Detectar tamaño de terminal
 obtener_tamano() {
-    COLUMNAS=$(tput cols 2>/dev/null || echo 80)
-    LINEAS=$(tput lines 2>/dev/null || echo 24)
+    if command -v tput >/dev/null 2>&1; then
+        COLUMNAS=$(tput cols 2>/dev/null || echo 80)
+        LINEAS=$(tput lines 2>/dev/null || echo 24)
+    else
+        COLUMNAS=80
+        LINEAS=24
+    fi
 }
 
 # Limpiar pantalla adaptativa
@@ -115,31 +123,10 @@ limpiar_pantalla() {
     obtener_tamano
 }
 
-# Mostrar título según tamaño
-mostrar_titulo() {
-    obtener_tamano
-    local titulo="$1"
-    
-    if [ "$COLUMNAS" -lt 60 ]; then
-        # Móvil muy pequeño
-        echo ""
-        echo "🔧 $titulo"
-        echo "══════════════"
-    elif [ "$COLUMNAS" -lt 80 ]; then
-        # Tablet
-        echo ""
-        echo "🔧 $titulo"
-        echo "════════════════════════════"
-    else
-        # Desktop
-        echo ""
-        echo "🔧 $titulo"
-        echo "══════════════════════════════════════"
-    fi
-    echo ""
-}
+# ==============================================
+# MOSTRAR MENÚ (COMPATIBLE CON SH)
+# ==============================================
 
-# Mostrar menú responsive
 mostrar_menu() {
     limpiar_pantalla
     obtener_tamano
@@ -153,32 +140,43 @@ mostrar_menu() {
         
         # Estado rápido
         bloqueados=0
-        [ -f "$SUSPENDED_FILE" ] && bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null)
+        if [ -f "$SUSPENDED_FILE" ]; then
+            bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
+        fi
+        
         conectados=0
-        [ -f "/var/log/openvpn-status.log" ] && \
-            conectados=$(grep -c "^CLIENT_LIST" /var/log/openvpn-status.log 2>/dev/null)
+        if [ -f "/var/log/openvpn-status.log" ]; then
+            conectados=$(grep -c "^CLIENT_LIST" "/var/log/openvpn-status.log" 2>/dev/null || echo 0)
+        fi
         
         echo "📊: 🚫$bloqueados 🟢$conectados"
         echo ""
         
         # 2 clientes máximo
-        if [ "$conectados" -gt 0 ]; then
+        if [ "$conectados" -gt 0 ] && [ -f "/var/log/openvpn-status.log" ]; then
             echo "👤:"
             count=0
-            while IFS=, read -r -a campos && [ $count -lt 2 ]; do
-                if [[ "${campos[0]}" == "CLIENT_LIST" ]] && [[ "${campos[1]}" != "Common Name" ]]; then
+            while read -r linea; do
+                if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
                     count=$((count + 1))
-                    cliente=$(echo "${campos[1]}" | sed 's|/CN=||')
-                    nombre="$cliente"
-                    [ ${#nombre} -gt 8 ] && nombre="${nombre:0:6}.."
+                    [ $count -gt 2 ] && break
+                    
+                    cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                    
+                    # Acortar nombre
+                    if [ ${#cliente} -gt 8 ]; then
+                        nombre_display=$(echo "$cliente" | cut -c1-6)..
+                    else
+                        nombre_display="$cliente"
+                    fi
                     
                     if esta_bloqueado "$cliente"; then
-                        echo " $count) 🔴 $nombre"
+                        echo " $count) 🔴 $nombre_display"
                     else
-                        echo " $count) 🟢 $nombre"
+                        echo " $count) 🟢 $nombre_display"
                     fi
                 fi
-            done < /var/log/openvpn-status.log 2>/dev/null
+            done < "/var/log/openvpn-status.log"
             
             [ "$conectados" -gt 2 ] && echo " ..."
             echo ""
@@ -201,10 +199,14 @@ mostrar_menu() {
         
         # Estado
         bloqueados=0
-        [ -f "$SUSPENDED_FILE" ] && bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null)
+        if [ -f "$SUSPENDED_FILE" ]; then
+            bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
+        fi
+        
         conectados=0
-        [ -f "/var/log/openvpn-status.log" ] && \
-            conectados=$(grep -c "^CLIENT_LIST" /var/log/openvpn-status.log 2>/dev/null)
+        if [ -f "/var/log/openvpn-status.log" ]; then
+            conectados=$(grep -c "^CLIENT_LIST" "/var/log/openvpn-status.log" 2>/dev/null || echo 0)
+        fi
         
         echo "📊 ESTADO:"
         echo "🚫 Bloqueados:  $bloqueados"
@@ -212,24 +214,32 @@ mostrar_menu() {
         echo ""
         
         # 3 clientes en tablet
-        if [ "$conectados" -gt 0 ]; then
+        if [ "$conectados" -gt 0 ] && [ -f "/var/log/openvpn-status.log" ]; then
             echo "👥 CONECTADOS:"
             count=0
-            while IFS=, read -r -a campos && [ $count -lt 3 ]; do
-                if [[ "${campos[0]}" == "CLIENT_LIST" ]] && [[ "${campos[1]}" != "Common Name" ]]; then
+            while read -r linea; do
+                if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
                     count=$((count + 1))
-                    cliente=$(echo "${campos[1]}" | sed 's|/CN=||')
-                    ip=$(echo "${campos[2]}" | cut -d: -f1)
-                    [ ${#cliente} -gt 12 ] && cliente="${cliente:0:10}.."
+                    [ $count -gt 3 ] && break
+                    
+                    cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                    ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
+                    
+                    # Acortar nombre
+                    if [ ${#cliente} -gt 12 ]; then
+                        cliente_display=$(echo "$cliente" | cut -c1-10)..
+                    else
+                        cliente_display="$cliente"
+                    fi
                     
                     if esta_bloqueado "$cliente"; then
-                        echo "  $count) 🔴 $cliente"
+                        echo "  $count) 🔴 $cliente_display"
                     else
-                        echo "  $count) 🟢 $cliente"
+                        echo "  $count) 🟢 $cliente_display"
                     fi
                     echo "      📍 $ip"
                 fi
-            done < /var/log/openvpn-status.log 2>/dev/null
+            done < "/var/log/openvpn-status.log"
             
             [ "$conectados" -gt 3 ] && echo "  ... y $((conectados - 3)) más"
             echo ""
@@ -260,10 +270,14 @@ mostrar_menu() {
         
         # Estado completo
         bloqueados=0
-        [ -f "$SUSPENDED_FILE" ] && bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null)
+        if [ -f "$SUSPENDED_FILE" ]; then
+            bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
+        fi
+        
         conectados=0
-        [ -f "/var/log/openvpn-status.log" ] && \
-            conectados=$(grep -c "^CLIENT_LIST" /var/log/openvpn-status.log 2>/dev/null)
+        if [ -f "/var/log/openvpn-status.log" ]; then
+            conectados=$(grep -c "^CLIENT_LIST" "/var/log/openvpn-status.log" 2>/dev/null || echo 0)
+        fi
         
         echo "📊 ESTADO ACTUAL:"
         echo "────────────────"
@@ -272,15 +286,17 @@ mostrar_menu() {
         echo ""
         
         # 4 clientes en desktop
-        if [ "$conectados" -gt 0 ]; then
+        if [ "$conectados" -gt 0 ] && [ -f "/var/log/openvpn-status.log" ]; then
             echo "👥 CLIENTES CONECTADOS:"
             echo ""
             count=0
-            while IFS=, read -r -a campos && [ $count -lt 4 ]; do
-                if [[ "${campos[0]}" == "CLIENT_LIST" ]] && [[ "${campos[1]}" != "Common Name" ]]; then
+            while read -r linea; do
+                if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
                     count=$((count + 1))
-                    cliente=$(echo "${campos[1]}" | sed 's|/CN=||')
-                    ip=$(echo "${campos[2]}" | cut -d: -f1)
+                    [ $count -gt 4 ] && break
+                    
+                    cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                    ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
                     nombre=$(obtener_nombre "$cliente")
                     
                     if esta_bloqueado "$cliente"; then
@@ -290,7 +306,7 @@ mostrar_menu() {
                     fi
                     echo "      📍 $ip"
                 fi
-            done < /var/log/openvpn-status.log 2>/dev/null
+            done < "/var/log/openvpn-status.log"
             
             [ "$conectados" -gt 4 ] && echo "  ... y $((conectados - 4)) más"
             echo ""
@@ -313,7 +329,7 @@ mostrar_menu() {
 }
 
 # ==============================================
-# MOSTRAR CLIENTES CONECTADOS (RESPONSIVE)
+# MOSTRAR CLIENTES CONECTADOS (COMPATIBLE CON SH)
 # ==============================================
 
 mostrar_conectados() {
@@ -335,28 +351,37 @@ mostrar_conectados() {
         echo ""
         
         total=0
-        grep "^CLIENT_LIST" /var/log/openvpn-status.log | grep -v "Common Name" | while read -r linea; do
-            total=$((total + 1))
-            cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
-            ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
-            
-            # Nombre corto
-            nombre="$cliente"
-            if [ -f "$NOMBRES_FILE" ]; then
-                nom=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2)
-                [ -n "$nom" ] && nombre="$nom"
+        while read -r linea; do
+            if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
+                total=$((total + 1))
+                cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
+                
+                # Nombre corto
+                nombre="$cliente"
+                if [ -f "$NOMBRES_FILE" ]; then
+                    nom=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2)
+                    if [ -n "$nom" ]; then
+                        nombre="$nom"
+                    fi
+                fi
+                
+                if [ ${#nombre} -gt 10 ]; then
+                    nombre_display=$(echo "$nombre" | cut -c1-8)..
+                else
+                    nombre_display="$nombre"
+                fi
+                
+                # Estado
+                if esta_bloqueado "$cliente"; then
+                    echo "🔴 $nombre_display"
+                else
+                    echo "🟢 $nombre_display"
+                fi
+                echo "   $ip"
+                echo ""
             fi
-            [ ${#nombre} -gt 10 ] && nombre="${nombre:0:8}.."
-            
-            # Estado
-            if esta_bloqueado "$cliente"; then
-                echo "🔴 $nombre"
-            else
-                echo "🟢 $nombre"
-            fi
-            echo "   $ip"
-            echo ""
-        done
+        done < "/var/log/openvpn-status.log"
         
         [ $total -gt 0 ] && echo "📊 Total: $total"
         echo ""
@@ -369,27 +394,31 @@ mostrar_conectados() {
         echo ""
         
         total=0
-        grep "^CLIENT_LIST" /var/log/openvpn-status.log | grep -v "Common Name" | while read -r linea; do
-            total=$((total + 1))
-            cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
-            ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
-            
-            # Nombre
-            nombre="$cliente"
-            if [ -f "$NOMBRES_FILE" ]; then
-                nom=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2)
-                [ -n "$nom" ] && nombre="$nom"
+        while read -r linea; do
+            if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
+                total=$((total + 1))
+                cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
+                
+                # Nombre
+                nombre="$cliente"
+                if [ -f "$NOMBRES_FILE" ]; then
+                    nom=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null | cut -d: -f2)
+                    if [ -n "$nom" ]; then
+                        nombre="$nom"
+                    fi
+                fi
+                
+                # Estado
+                if esta_bloqueado "$cliente"; then
+                    echo "🔴 $nombre ($cliente)"
+                else
+                    echo "🟢 $nombre ($cliente)"
+                fi
+                echo "   IP: $ip"
+                echo ""
             fi
-            
-            # Estado
-            if esta_bloqueado "$cliente"; then
-                echo "🔴 $nombre ($cliente)"
-            else
-                echo "🟢 $nombre ($cliente)"
-            fi
-            echo "   IP: $ip"
-            echo ""
-        done
+        done < "/var/log/openvpn-status.log"
         
         [ $total -gt 0 ] && echo "📊 Total: $total clientes"
         echo ""
@@ -402,77 +431,74 @@ mostrar_conectados() {
         echo ""
         
         total=0
-        while IFS=, read -r -a campos; do
-            [[ "${campos[0]}" != "CLIENT_LIST" ]] && continue
-            [[ "${campos[1]}" == "Common Name" ]] && continue
-            
-            total=$((total + 1))
-            
-            cliente_raw="${campos[1]}"
-            cliente=$(echo "$cliente_raw" | sed 's|/CN=||')
-            ip_puerto="${campos[2]}"
-            ip=$(echo "$ip_puerto" | cut -d: -f1)
-            
-            # Obtener nombre real
-            nombre="$cliente"
-            if [ -f "$NOMBRES_FILE" ] && [ -s "$NOMBRES_FILE" ]; then
-                nombre_linea=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null)
-                if [ -n "$nombre_linea" ]; then
-                    nombre=$(echo "$nombre_linea" | cut -d: -f2-)
-                fi
-            fi
-            
-            # Estado
-            if esta_bloqueado "$cliente"; then
-                circulo="🔴"
-            else
-                circulo="🟢"
-            fi
-            
-            # Fecha y tiempo
-            fecha_hora=""
-            tiempo_desde=""
-            
-            if [ ${#campos[@]} -ge 7 ]; then
-                fecha_raw="${campos[6]}"
-                for ((i=7; i<${#campos[@]}; i++)); do
-                    fecha_raw="$fecha_raw ${campos[i]}"
-                done
+        while read -r linea; do
+            if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
+                total=$((total + 1))
                 
-                fecha_limpia=$(echo "$fecha_raw" | sed 's/Connected Since: //')
-                fecha_hora=$(date -d "$fecha_limpia" '+%d/%m %H:%M:%S' 2>/dev/null || echo "$fecha_limpia")
+                cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                ip=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
                 
-                # Calcular tiempo
-                fecha_epoch=$(date -d "$fecha_limpia" '+%s' 2>/dev/null)
-                ahora=$(date '+%s')
-                
-                if [ -n "$fecha_epoch" ] && [ "$fecha_epoch" -gt 0 ]; then
-                    segundos=$((ahora - fecha_epoch))
-                    
-                    if [ $segundos -lt 60 ]; then
-                        tiempo_desde="${segundos}s"
-                    elif [ $segundos -lt 3600 ]; then
-                        tiempo_desde="$((segundos / 60))m"
-                    elif [ $segundos -lt 86400 ]; then
-                        tiempo_desde="$((segundos / 3600))h"
-                    else
-                        tiempo_desde="$((segundos / 86400))d"
+                # Obtener nombre real
+                nombre="$cliente"
+                if [ -f "$NOMBRES_FILE" ] && [ -s "$NOMBRES_FILE" ]; then
+                    nombre_linea=$(grep "^$cliente:" "$NOMBRES_FILE" 2>/dev/null)
+                    if [ -n "$nombre_linea" ]; then
+                        nombre=$(echo "$nombre_linea" | cut -d: -f2-)
                     fi
                 fi
-            else
-                fecha_hora="--/-- --:--:--"
-                tiempo_desde="?"
+                
+                # Estado
+                if esta_bloqueado "$cliente"; then
+                    circulo="🔴"
+                else
+                    circulo="🟢"
+                fi
+                
+                # Extraer fecha y tiempo
+                fecha_hora=""
+                tiempo_desde=""
+                
+                # Intentar extraer fecha de conexión
+                if echo "$linea" | grep -q "Connected Since:"; then
+                    # Extraer todo después de "Connected Since: "
+                    fecha_raw=$(echo "$linea" | sed 's/.*Connected Since: //')
+                    
+                    # Formatear fecha (dd/mm HH:MM:SS)
+                    fecha_hora=$(date -d "$fecha_raw" '+%d/%m %H:%M:%S' 2>/dev/null || echo "$fecha_raw")
+                    
+                    # Calcular tiempo transcurrido
+                    fecha_epoch=$(date -d "$fecha_raw" '+%s' 2>/dev/null)
+                    ahora=$(date '+%s')
+                    
+                    if [ -n "$fecha_epoch" ] && [ "$fecha_epoch" -gt 0 ]; then
+                        segundos=$((ahora - fecha_epoch))
+                        
+                        if [ $segundos -lt 60 ]; then
+                            tiempo_desde="${segundos}s"
+                        elif [ $segundos -lt 3600 ]; then
+                            tiempo_desde="$((segundos / 60))m"
+                        elif [ $segundos -lt 86400 ]; then
+                            tiempo_desde="$((segundos / 3600))h"
+                        else
+                            tiempo_desde="$((segundos / 86400))d"
+                        fi
+                    fi
+                else
+                    fecha_hora="--/-- --:--:--"
+                    tiempo_desde="?"
+                fi
+                
+                # Mostrar
+                echo "$circulo $nombre ($cliente)"
+                echo "   IP: $ip"
+                echo "   Conectado: $fecha_hora ($tiempo_desde)"
+                
+                # Separador (excepto último)
+                if [ $total -lt $(grep -c "^CLIENT_LIST" "/var/log/openvpn-status.log" 2>/dev/null) ]; then
+                    echo ""
+                fi
             fi
-            
-            # Mostrar
-            echo "$circulo $nombre ($cliente)"
-            echo "   IP: $ip"
-            echo "   Conectado: $fecha_hora ($tiempo_desde)"
-            
-            # Separador
-            [ $total -lt $(grep -c "^CLIENT_LIST" /var/log/openvpn-status.log) ] && echo ""
-            
-        done < /var/log/openvpn-status.log
+        done < "/var/log/openvpn-status.log"
         
         if [ $total -eq 0 ]; then
             echo "ℹ️  No hay clientes conectados"
@@ -485,7 +511,7 @@ mostrar_conectados() {
 }
 
 # ==============================================
-# BLOQUEO DE CLIENTES (RESPONSIVE)
+# BLOQUEO DE CLIENTES (COMPATIBLE CON SH)
 # ==============================================
 
 bloquear_cliente() {
@@ -520,11 +546,11 @@ bloquear_cliente() {
         echo ""
         
         count=0
-        while IFS=, read -r -a campos; do
-            if [[ "${campos[0]}" == "CLIENT_LIST" ]] && [[ "${campos[1]}" != "Common Name" ]]; then
+        while read -r linea; do
+            if echo "$linea" | grep -q "^CLIENT_LIST" && ! echo "$linea" | grep -q "Common Name"; then
                 count=$((count + 1))
-                cliente=$(echo "${campos[1]}" | sed 's|/CN=||')
-                ip_real=$(echo "${campos[2]}" | cut -d: -f1)
+                cliente=$(echo "$linea" | cut -d, -f2 | sed 's|/CN=||')
+                ip_real=$(echo "$linea" | cut -d, -f3 | cut -d: -f1)
                 nombre=$(obtener_nombre "$cliente")
                 
                 if [ "$COLUMNAS" -lt 60 ]; then
@@ -533,7 +559,7 @@ bloquear_cliente() {
                     echo "  $count) $nombre ($cliente) - $ip_real"
                 fi
             fi
-        done < /var/log/openvpn-status.log
+        done < "/var/log/openvpn-status.log"
         echo ""
     fi
     
@@ -587,7 +613,12 @@ bloquear_cliente() {
     
     # Añadir a lista de bloqueos
     temp_file="/tmp/suspended_$$.tmp"
-    grep -v "^$cliente:" "$SUSPENDED_FILE" 2>/dev/null > "$temp_file"
+    if [ -f "$SUSPENDED_FILE" ]; then
+        grep -v "^$cliente:" "$SUSPENDED_FILE" > "$temp_file" 2>/dev/null
+    else
+        > "$temp_file"
+    fi
+    
     fecha=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$cliente:$fecha:bloqueado_por_$(whoami)" >> "$temp_file"
     mv "$temp_file" "$SUSPENDED_FILE"
@@ -611,7 +642,11 @@ bloquear_cliente() {
     echo "🔌 Desconectando cliente..."
     if [ -f "/var/log/openvpn-status.log" ] && grep -q "/CN=$cliente" "/var/log/openvpn-status.log"; then
         echo "📡 Cliente conectado, reiniciando OpenVPN..."
-        systemctl restart openvpn 2>/dev/null && echo "✅ Reiniciado" || echo "⚠️  Reinicia manualmente"
+        if systemctl restart openvpn 2>/dev/null; then
+            echo "✅ Reiniciado"
+        else
+            echo "⚠️  Reinicia manualmente: systemctl restart openvpn"
+        fi
     else
         echo "ℹ️  Cliente no conectado"
     fi
@@ -651,7 +686,9 @@ configurar_openvpn() {
 CLIENT="$1"
 CLIENT_CLEAN=$(echo "$CLIENT" | sed 's|/CN=||')
 SUSPENDED="/etc/openvpn/clientes/suspended.txt"
-[ -f "$SUSPENDED" ] && grep -q "^$CLIENT_CLEAN:" "$SUSPENDED" && exit 1
+if [ -f "$SUSPENDED" ] && grep -q "^$CLIENT_CLEAN:" "$SUSPENDED"; then
+    exit 1
+fi
 exit 0
 SCRIPT_EOF
     
@@ -660,23 +697,40 @@ SCRIPT_EOF
     
     # Configurar OpenVPN
     if [ -f "$OPENVPN_CONFIG" ]; then
+        # Hacer backup
+        cp "$OPENVPN_CONFIG" "${OPENVPN_CONFIG}.backup.$(date +%s)" 2>/dev/null
+        
+        # Eliminar configuraciones anteriores
         sed -i '/^script-security/d' "$OPENVPN_CONFIG"
         sed -i '/^client-connect/d' "$OPENVPN_CONFIG"
+        
+        # Añadir nuevas configuraciones
         echo "" >> "$OPENVPN_CONFIG"
+        echo "# =========================================" >> "$OPENVPN_CONFIG"
+        echo "# BLOQUEO DE CLIENTES (AUTOMÁTICO)" >> "$OPENVPN_CONFIG"
+        echo "# =========================================" >> "$OPENVPN_CONFIG"
         echo "script-security 2" >> "$OPENVPN_CONFIG"
         echo "client-connect $SCRIPT_FILE" >> "$OPENVPN_CONFIG"
+        
         echo "✅ Configurado $OPENVPN_CONFIG"
         
-        # Recargar
-        systemctl reload openvpn 2>/dev/null && echo "✅ OpenVPN recargado" || \
-        systemctl restart openvpn 2>/dev/null && echo "✅ OpenVPN reiniciado" || \
-        echo "⚠️  Reinicia manualmente"
+        # Recargar OpenVPN
+        echo "🔄 Recargando OpenVPN..."
+        if systemctl reload openvpn 2>/dev/null; then
+            echo "✅ OpenVPN recargado"
+        elif systemctl restart openvpn 2>/dev/null; then
+            echo "✅ OpenVPN reiniciado"
+        else
+            echo "⚠️  Reinicia manualmente: systemctl restart openvpn"
+        fi
     else
         echo "❌ No se encuentra $OPENVPN_CONFIG"
         echo ""
-        echo "💡 Añade manualmente:"
-        echo "script-security 2"
-        echo "client-connect $SCRIPT_FILE"
+        if [ "$COLUMNAS" -ge 60 ]; then
+            echo "💡 Añade manualmente:"
+            echo "script-security 2"
+            echo "client-connect $SCRIPT_FILE"
+        fi
     fi
     
     echo ""
@@ -685,7 +739,7 @@ SCRIPT_EOF
 }
 
 # ==============================================
-# FUNCIONES RESTANTES (SIMPLIFICADAS)
+# VERIFICACIÓN DEL SISTEMA
 # ==============================================
 
 verificar_sistema() {
@@ -704,19 +758,39 @@ verificar_sistema() {
     echo ""
     
     echo "📁 ARCHIVOS:"
-    [ -f "$SUSPENDED_FILE" ] && \
-        echo "✅ Bloqueos: $(basename "$SUSPENDED_FILE") ($(wc -l < "$SUSPENDED_FILE"))" || \
+    if [ -f "$SUSPENDED_FILE" ]; then
+        bloqueados_count=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
+        echo "✅ Bloqueos: $(basename "$SUSPENDED_FILE") ($bloqueados_count)"
+    else
         echo "❌ Bloqueos: NO EXISTE"
-    [ -f "$SCRIPT_FILE" ] && echo "✅ Script: $(basename "$SCRIPT_FILE")" || echo "❌ Script: NO EXISTE"
-    [ -f "$OPENVPN_CONFIG" ] && echo "✅ Config: $(basename "$OPENVPN_CONFIG")" || echo "❌ Config: NO EXISTE"
+    fi
+    
+    if [ -f "$SCRIPT_FILE" ]; then
+        echo "✅ Script: $(basename "$SCRIPT_FILE")"
+    else
+        echo "❌ Script: NO EXISTE"
+    fi
+    
+    if [ -f "$OPENVPN_CONFIG" ]; then
+        echo "✅ Config: $(basename "$OPENVPN_CONFIG")"
+    else
+        echo "❌ Config: NO EXISTE"
+    fi
     echo ""
     
     if [ "$COLUMNAS" -ge 60 ]; then
         echo "⚙️  OPENVPN:"
-        [ -f "$OPENVPN_CONFIG" ] && grep -q "script-security" "$OPENVPN_CONFIG" && \
-            echo "✅ script-security" || echo "❌ script-security"
-        [ -f "$OPENVPN_CONFIG" ] && grep -q "client-connect" "$OPENVPN_CONFIG" && \
-            echo "✅ client-connect" || echo "❌ client-connect"
+        if [ -f "$OPENVPN_CONFIG" ] && grep -q "script-security" "$OPENVPN_CONFIG"; then
+            echo "✅ script-security"
+        else
+            echo "❌ script-security"
+        fi
+        
+        if [ -f "$OPENVPN_CONFIG" ] && grep -q "client-connect" "$OPENVPN_CONFIG"; then
+            echo "✅ client-connect"
+        else
+            echo "❌ client-connect"
+        fi
         echo ""
     fi
     
@@ -724,7 +798,10 @@ verificar_sistema() {
     if [ -s "$SUSPENDED_FILE" ]; then
         count=0
         while IFS=: read -r cliente fecha _; do
-            [ -n "$cliente" ] && count=$((count + 1)) && echo " $count) $cliente"
+            if [ -n "$cliente" ]; then
+                count=$((count + 1))
+                echo " $count) $cliente"
+            fi
         done < "$SUSPENDED_FILE"
     else
         echo " ℹ️  No hay bloqueados"
@@ -733,11 +810,12 @@ verificar_sistema() {
 }
 
 # ==============================================
-# MENÚ PRINCIPAL
+# FUNCIÓN PRINCIPAL
 # ==============================================
 
 main() {
-    log "=== Sistema iniciado ==="
+    # Iniciar log
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Sistema iniciado" >> "$LOG_FILE"
     
     while true; do
         mostrar_menu
@@ -749,9 +827,17 @@ main() {
                 ;;
             2)
                 limpiar_pantalla
-                echo ""
-                echo "✅ DESBLOQUEAR CLIENTE"
-                echo "══════════════════════════════════════"
+                obtener_tamano
+                
+                if [ "$COLUMNAS" -lt 60 ]; then
+                    echo ""
+                    echo "✅ DESBLOQUEAR"
+                    echo "═════════════"
+                else
+                    echo ""
+                    echo "✅ DESBLOQUEAR CLIENTE"
+                    echo "══════════════════════════════════════"
+                fi
                 echo ""
                 
                 if [ ! -s "$SUSPENDED_FILE" ]; then
@@ -760,7 +846,10 @@ main() {
                     echo "Bloqueados:"
                     num=0
                     while IFS=: read -r cliente fecha _; do
-                        [ -n "$cliente" ] && num=$((num + 1)) && echo "  $num) $cliente"
+                        if [ -n "$cliente" ]; then
+                            num=$((num + 1))
+                            echo "  $num) $cliente"
+                        fi
                     done < "$SUSPENDED_FILE"
                     
                     echo ""
@@ -769,22 +858,30 @@ main() {
                     
                     if echo "$num" | grep -qE '^[0-9]+$'; then
                         counter=0
+                        cliente_desbloquear=""
                         while IFS=: read -r cliente fecha _; do
-                            [ -n "$cliente" ] && counter=$((counter + 1))
-                            [ "$counter" -eq "$num" ] && break
+                            if [ -n "$cliente" ]; then
+                                counter=$((counter + 1))
+                                if [ "$counter" -eq "$num" ]; then
+                                    cliente_desbloquear="$cliente"
+                                    break
+                                fi
+                            fi
                         done < "$SUSPENDED_FILE"
                         
-                        if [ -n "$cliente" ]; then
+                        if [ -n "$cliente_desbloquear" ]; then
                             echo ""
-                            echo -n "¿Desbloquear $cliente? (s/N): "
+                            echo -n "¿Desbloquear $cliente_desbloquear? (s/N): "
                             read confirmar
                             
                             if [ "$confirmar" = "s" ] || [ "$confirmar" = "S" ]; then
                                 temp_file="/tmp/desbloqueo_$$.tmp"
-                                grep -v "^$cliente:" "$SUSPENDED_FILE" > "$temp_file"
+                                grep -v "^$cliente_desbloquear:" "$SUSPENDED_FILE" > "$temp_file"
                                 mv "$temp_file" "$SUSPENDED_FILE"
-                                log "Cliente $cliente desbloqueado"
+                                echo "$(date '+%Y-%m-%d %H:%M:%S') - Cliente $cliente_desbloquear desbloqueado" >> "$LOG_FILE"
                                 echo "✅ Desbloqueado"
+                                
+                                # Recargar OpenVPN
                                 systemctl reload openvpn 2>/dev/null
                             fi
                         fi
@@ -804,7 +901,7 @@ main() {
                 echo "══════════════════════════════════════"
                 echo ""
                 echo "Últimas 10 líneas:"
-                tail -10 "$LOG_FILE"
+                tail -10 "$LOG_FILE" 2>/dev/null || echo "No hay logs"
                 echo ""
                 ;;
             6)
@@ -815,7 +912,9 @@ main() {
                 echo ""
                 if [ -s "$SUSPENDED_FILE" ]; then
                     while IFS=: read -r cliente fecha _; do
-                        [ -n "$cliente" ] && echo "• $cliente - $fecha"
+                        if [ -n "$cliente" ]; then
+                            echo "• $cliente - $fecha"
+                        fi
                     done < "$SUSPENDED_FILE"
                 else
                     echo "ℹ️  No hay clientes bloqueados"
@@ -828,7 +927,7 @@ main() {
             8)
                 echo ""
                 echo "👋 ¡Hasta luego!"
-                log "Sistema finalizado"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - Sistema finalizado" >> "$LOG_FILE"
                 exit 0
                 ;;
             *)
