@@ -263,13 +263,13 @@ ver_conectados() {
     done
     
    
-        echo "│ ✅ Total de clientes conectados: $contador               │"
+       
         # Mostrar estadísticas adicionales
         echo "│ 📊 IPs registradas en historial: $contador              │"
         escribir_log "📊 Mostrados $contador clientes conectados, IPs registradas"
     fi
     
-    echo "└─────────────────────────────────────────────────────────┘"
+   
     echo ""
     
     if [ $contador -gt 0 ]; then
@@ -1227,9 +1227,6 @@ echo "      📊 CLIENTES CONECTADOS"
 echo "      ======================"
 echo "      🕒 Fecha actual: 03/12/2025 16:33"
 echo ""
-echo "      ┌─────────────────────────────────────────────────────────┐"
-echo "      │                    CLIENTES CONECTADOS                  │"
-echo "      ├─────────────────────────────────────────────────────────┤"
 echo "      │ 📍 Cliente 1"
 echo "      │ ├─👤 Nombre: client2"
 echo "      │ ├─🔑 Certificado: client2"
@@ -1243,12 +1240,6 @@ echo "      │ ├─🔑 Certificado: client3"
 echo "      │ ├─🌐 IP Real: 83.39.230.130:36465"
 echo "      │ ├─🔗 IP VPN: 10.8.0.3"
 echo "      │ └─🕒 Conectado desde: 2025-12-03 01:47:03"
-echo "      ├─────────────────────────────────────────────────────────┤"
-echo "      │                    RESUMEN FINAL                         │"
-echo "      ├─────────────────────────────────────────────────────────┤"
-echo "      │ ✅ Total de clientes conectados: 2                       │"
-echo "      │ 📊 IPs registradas en historial: 2                       │"
-echo "      └─────────────────────────────────────────────────────────┘"
 echo ""
 echo "🚀 PRUEBA INMEDIATA:"
 echo "   Ejecuta: gestion"
