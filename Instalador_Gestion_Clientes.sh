@@ -248,8 +248,7 @@ ver_conectados() {
             echo "│ ├─🌐 IP Real: $ip_puerto"
             echo "│ ├─🔗 IP VPN: $ip_virtual"
             echo "│ └─🕒 Conectado desde: $fecha_conexion"
-            echo "├─────────────────────────────────────────────────────────┤"
-            
+                        
             # Registrar IP en el historial
             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
             ip_sin_puerto=$(echo "$ip_puerto" | cut -d: -f1)
