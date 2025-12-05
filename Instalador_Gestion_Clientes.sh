@@ -222,9 +222,6 @@ ver_conectados() {
     # Contador de clientes
     contador=0
     
-    echo "┌─────────────────────────────────────────────────────────┐"
-    echo "│                    CLIENTES CONECTADOS                  │"
-    echo "├─────────────────────────────────────────────────────────┤"
     
     # Procesar cada cliente (excluyendo la línea HEADER)
     grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "HEADER" | while read linea; do
@@ -265,12 +262,7 @@ ver_conectados() {
         fi
     done
     
-    echo "│                    RESUMEN FINAL                         │"
-    echo "├─────────────────────────────────────────────────────────┤"
-    
-    if [ $contador -eq 0 ]; then
-        echo "│ ℹ️  No se encontraron clientes conectados              │"
-    else
+   
         echo "│ ✅ Total de clientes conectados: $contador               │"
         # Mostrar estadísticas adicionales
         echo "│ 📊 IPs registradas en historial: $contador              │"
