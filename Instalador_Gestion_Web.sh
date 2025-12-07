@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO SISTEMA CON REGISTRO DE LOGS"
-echo "==========================================="
+echo "🔧 ACTUALIZANDO SISTEMA CON FECHA COMPLETA"
+echo "=========================================="
 
 # Actualizar el script
 cat > /usr/bin/gestion << 'EOF'
@@ -20,6 +20,25 @@ touch "$NOMBRES_FILE"
 touch "$IP_HISTORY_FILE"
 touch "$SUSPENDED_FILE"
 touch "$LOG_FILE"
+
+# Función para convertir timestamp Unix a fecha legible
+timestamp_a_fecha() {
+    timestamp="$1"
+    if [ -n "$timestamp" ] && [ "$timestamp" -gt 0 ] 2>/dev/null; then
+        # Intentar convertir con date si está disponible
+        if command -v date >/dev/null 2>&1; then
+            # Para sistemas GNU (Linux)
+            date -d "@$timestamp" '+%d/%m/%Y %H:%M:%S' 2>/dev/null || \
+            # Para sistemas BSD (macOS)
+            date -r "$timestamp" '+%d/%m/%Y %H:%M:%S' 2>/dev/null || \
+            echo "Fecha desconocida"
+        else
+            echo "Fecha: $timestamp"
+        fi
+    else
+        echo "Fecha desconocida"
+    fi
+}
 
 # Función para escribir en log
 escribir_log() {
@@ -191,7 +210,7 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# Función para ver clientes conectados - VERSIÓN SIMPLIFICADA
+# Función para ver clientes conectados - VERSIÓN CON FECHA COMPLETA
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
@@ -208,7 +227,7 @@ ver_conectados() {
     fi
     
     # Obtener fecha actual
-    fecha_hora_actual=$(date '+%d/%m/%Y %H:%M')
+    fecha_hora_actual=$(date '+%d/%m/%Y %H:%M:%S')
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
@@ -228,7 +247,9 @@ ver_conectados() {
         cliente=$(echo "$linea" | awk '{print $2}')
         ip_puerto=$(echo "$linea" | awk '{print $3}')
         ip_virtual=$(echo "$linea" | awk '{print $4}')
-        fecha_conexion=$(echo "$linea" | awk '{print $8" "$9}')
+        
+        # Extraer el timestamp Unix (columna 9)
+        timestamp_unix=$(echo "$linea" | awk '{print $9}')
         
         if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
             cliente_limpio=$(echo "$cliente" | sed 's|/CN=||')
@@ -236,6 +257,9 @@ ver_conectados() {
             
             # Incrementar contador
             contador=$((contador + 1))
+            
+            # Convertir timestamp Unix a fecha legible
+            fecha_conexion=$(timestamp_a_fecha "$timestamp_unix")
             
             # Mostrar información en formato simplificado
             echo "    📍 Cliente $contador"
@@ -254,7 +278,7 @@ ver_conectados() {
             grep -v "^$cliente_limpio:$ip_sin_puerto:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
             mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
             
-            # Añadir nueva entrada
+            # Añadir nueva entrada (guardamos la fecha legible)
             echo "$cliente_limpio:$ip_sin_puerto:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
             
             # Registrar en log
@@ -936,7 +960,7 @@ registrar_ip_manual() {
         return
     fi
     
-    fecha_conexion=$(date '+%d/%m/%Y %H:%M')
+    fecha_conexion=$(date '+%d/%m/%Y %H:%M:%S')
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
     # Eliminar entrada antigua si existe
@@ -1210,39 +1234,46 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA ACTUALIZADO CON FORMATO SIMPLIFICADO"
+echo "✅ SISTEMA ACTUALIZADO CON FECHA COMPLETA"
 echo ""
-echo "🔧 CAMBIOS REALIZADOS:"
-echo "   1. ✅ FUNCIÓN ver_conectados() MODIFICADA:"
-echo "      - Se eliminó el formato de tabla con bordes"
-echo "      - Ahora muestra cada cliente en líneas individuales"
-echo "      - Formato más limpio y fácil de leer"
+echo "🔧 CAMBIOS PRINCIPALES:"
+echo "   1. ✅ NUEVA FUNCIÓN timestamp_a_fecha():"
+echo "      - Convierte timestamps Unix a formato legible"
+echo "      - Compatible con sistemas GNU (Linux) y BSD (macOS)"
+echo "      - Maneja errores si no se puede convertir"
 echo ""
-echo "   2. 📊 NUEVO FORMATO DE SALIDA:"
+echo "   2. 📅 FECHA COMPLETA EN ver_conectados():"
+echo "      - Ahora muestra 'dd/mm/yyyy HH:MM:SS'"
+echo "      - Ejemplo: '05/12/2025 15:27:28'"
+echo "      - Elimina el timestamp Unix crudo"
+echo ""
+echo "   3. 🎯 EJEMPLO DE SALIDA:"
 echo ""
 echo "      📊 CLIENTES CONECTADOS"
 echo "      ======================"
-echo "      🕒 Fecha actual: 03/12/2025 16:33"
+echo "      🕒 Fecha actual: 03/12/2025 16:33:22"
 echo ""
 echo "      📍 Cliente 1"
 echo "      👤 Nombre: Agustin"
 echo "      🔑 Certificado: client2"
 echo "      🌐 IP Real: 83.36.234.252:38684"
 echo "      🔗 IP VPN: 10.8.0.2"
-echo "      🕒 Conectado desde: 15:27:28"
+echo "      🕒 Conectado desde: 05/12/2025 15:27:28"
 echo ""
 echo "      📍 Cliente 2"
 echo "      👤 Nombre: Jose Luis"
 echo "      🔑 Certificado: client4"
 echo "      🌐 IP Real: 79.116.129.200:40325"
 echo "      🔗 IP VPN: 10.8.0.4"
-echo "      🕒 Conectado desde: 20:08:44"
+echo "      🕒 Conectado desde: 05/12/2025 20:08:44"
 echo ""
-echo "   3. 🎯 RESULTADO ESPERADO:"
-echo "      - Cada cliente aparece en un formato compacto"
-echo "      - Líneas más cortas y fáciles de leer"
-echo "      - Sin caracteres especiales de tablas"
+echo "   4. 📊 MEJORAS ADICIONALES:"
+echo "      - La fecha se guarda en el historial de IPs en formato legible"
+echo "      - Se registra en el log con fecha completa"
+echo "      - Compatibilidad mejorada con diferentes sistemas"
 echo ""
 echo "🚀 PRUEBA INMEDIATA:"
 echo "   Ejecuta: gestion"
-echo "   Selecciona opción 1 para ver el nuevo formato"
+echo "   Selecciona opción 1 para ver las fechas completas"
+echo ""
+echo "💡 NOTA: El timestamp Unix 1764858448 ahora se mostrará como '05/12/2025 15:27:28'"
