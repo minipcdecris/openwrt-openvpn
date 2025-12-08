@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO SISTEMA CON FECHA COMPLETA"
-echo "=========================================="
+echo "🔧 GESTION DE CLIENTES VPN"
+echo "================================================="
 
 # Actualizar el script
 cat > /usr/bin/gestion << 'EOF'
@@ -210,7 +210,7 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# Función para ver clientes conectados - VERSIÓN CON FECHA COMPLETA
+# Función para ver clientes conectados - VERSIÓN SIN RESUMEN VACÍO
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
@@ -286,21 +286,15 @@ ver_conectados() {
         fi
     done
     
-    # Mostrar resumen al final
-    echo "📊 RESUMEN:"
-    if [ $contador -eq 0 ]; then
-        echo "    ℹ️  No se encontraron clientes conectados"
-    else
-        echo "    ✅ Total de clientes conectados: $contador"
-        # Mostrar estadísticas adicionales
-        echo "    📊 IPs registradas en historial: $contador"
-        escribir_log "📊 Mostrados $contador clientes conectados, IPs registradas"
-    fi
-    
-    echo ""
-    
+    # Solo mostrar resumen si hay clientes conectados
     if [ $contador -gt 0 ]; then
+        echo "📊 RESUMEN:"
+        echo "    ✅ Total de clientes conectados: $contador"
+        echo "    📊 IPs registradas en historial: $contador"
+        echo ""
         echo "💡 Las IPs se han registrado automáticamente en el historial"
+        
+        escribir_log "📊 Mostrados $contador clientes conectados, IPs registradas"
     fi
 }
 
@@ -1234,46 +1228,25 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA ACTUALIZADO CON FECHA COMPLETA"
+echo "✅ SISTEMA ACTUALIZADO - RESUMEN VACÍO ELIMINADO"
 echo ""
-echo "🔧 CAMBIOS PRINCIPALES:"
-echo "   1. ✅ NUEVA FUNCIÓN timestamp_a_fecha():"
-echo "      - Convierte timestamps Unix a formato legible"
-echo "      - Compatible con sistemas GNU (Linux) y BSD (macOS)"
-echo "      - Maneja errores si no se puede convertir"
+echo "🔧 CAMBIOS REALIZADOS EN ver_conectados():"
 echo ""
-echo "   2. 📅 FECHA COMPLETA EN ver_conectados():"
-echo "      - Ahora muestra 'dd/mm/yyyy HH:MM:SS'"
-echo "      - Ejemplo: '05/12/2025 15:27:28'"
-echo "      - Elimina el timestamp Unix crudo"
+echo "   ANTES (cuando no hay clientes):"
+echo "   📊 RESUMEN:"
+echo "       ℹ️  No se encontraron clientes conectados"
 echo ""
-echo "   3. 🎯 EJEMPLO DE SALIDA:"
+echo "   AHORA (cuando no hay clientes):"
+echo "   ℹ️  No hay clientes conectados en este momento"
+echo "   (y ya no aparece la sección de RESUMEN)"
 echo ""
-echo "      📊 CLIENTES CONECTADOS"
-echo "      ======================"
-echo "      🕒 Fecha actual: 03/12/2025 16:33:22"
+echo "   CUANDO SÍ HAY CLIENTES, se muestra el resumen normalmente:"
+echo "   📊 RESUMEN:"
+echo "       ✅ Total de clientes conectados: 3"
+echo "       📊 IPs registradas en historial: 3"
 echo ""
-echo "      📍 Cliente 1"
-echo "      👤 Nombre: Agustin"
-echo "      🔑 Certificado: client2"
-echo "      🌐 IP Real: 83.36.234.252:38684"
-echo "      🔗 IP VPN: 10.8.0.2"
-echo "      🕒 Conectado desde: 05/12/2025 15:27:28"
-echo ""
-echo "      📍 Cliente 2"
-echo "      👤 Nombre: Jose Luis"
-echo "      🔑 Certificado: client4"
-echo "      🌐 IP Real: 79.116.129.200:40325"
-echo "      🔗 IP VPN: 10.8.0.4"
-echo "      🕒 Conectado desde: 05/12/2025 20:08:44"
-echo ""
-echo "   4. 📊 MEJORAS ADICIONALES:"
-echo "      - La fecha se guarda en el historial de IPs en formato legible"
-echo "      - Se registra en el log con fecha completa"
-echo "      - Compatibilidad mejorada con diferentes sistemas"
+echo "   💡 Solo se muestra el resumen si hay al menos 1 cliente conectado"
 echo ""
 echo "🚀 PRUEBA INMEDIATA:"
 echo "   Ejecuta: gestion"
-echo "   Selecciona opción 1 para ver las fechas completas"
-echo ""
-echo "💡 NOTA: El timestamp Unix 1764858448 ahora se mostrará como '05/12/2025 15:27:28'"
+echo "   Selecciona opción 1 para ver el nuevo comportamiento"
