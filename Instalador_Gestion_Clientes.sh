@@ -2,7 +2,7 @@
 
 echo ""
 echo "🔧 GESTION DE CLIENTES VPN"
-echo "================================================="
+echo "==============================="
 
 # Actualizar el script
 cat > /usr/bin/gestion << 'EOF'
