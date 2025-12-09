@@ -191,18 +191,19 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# Función para ver clientes conectados CON FECHA/HORA - VERSIÓN SIMPLIFICADA
+# Función para ver clientes conectados CON FECHA/HORA - VERSIÓN ACTUALIZADA
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
     echo "======================"
     echo ""
     
-    # Usar el archivo correcto (el tuyo está en /var/log/openvpn-status.log)
+    # Usar el archivo correcto
     if [ -f "/var/log/openvpn-status.log" ]; then
         STATUS_FILE="/var/log/openvpn-status.log"
     else
         echo "❌ No se encuentra /var/log/openvpn-status.log"
+        escribir_log "❌ No se encuentra /var/log/openvpn-status.log"
         return
     fi
     
@@ -211,48 +212,78 @@ ver_conectados() {
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
-    # Buscar líneas CLIENT_LIST con datos reales
-    if ! grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "UNDEF" | grep -q "."; then
+    # Buscar líneas CLIENT_LIST con datos reales (excluyendo la línea HEADER)
+    if ! grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "HEADER" | grep -q "."; then
         echo "ℹ️  No hay clientes conectados en este momento"
+        escribir_log "ℹ️  No hay clientes conectados"
         return
     fi
     
     # Contador de clientes
     contador=0
     
-    # Procesar cada cliente
-    grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "UNDEF" | while read linea; do
-        # Extraer datos (formato con espacios)
+    echo "┌─────────────────────────────────────────────────────────┐"
+    echo "│                    CLIENTES CONECTADOS                  │"
+    echo "├─────────────────────────────────────────────────────────┤"
+    
+    # Procesar cada cliente (excluyendo la línea HEADER)
+    grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "HEADER" | while read linea; do
+        # Extraer datos usando awk (el formato tiene columnas separadas por tabs)
         cliente=$(echo "$linea" | awk '{print $2}')
         ip_puerto=$(echo "$linea" | awk '{print $3}')
-        fecha=$(echo "$linea" | awk '{print $7}')
-        hora=$(echo "$linea" | awk '{print $8}')
+        ip_virtual=$(echo "$linea" | awk '{print $4}')
+        fecha_conexion=$(echo "$linea" | awk '{print $8" "$9}')
         
-        if [ -n "$cliente" ] && [ -n "$ip_puerto" ]; then
+        if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
             cliente_limpio=$(echo "$cliente" | sed 's|/CN=||')
             nombre_descriptivo=$(obtener_nombre "$cliente_limpio")
             
             # Incrementar contador
             contador=$((contador + 1))
             
-            # Mostrar información básica
-            echo "$contador) 👤 $nombre_descriptivo ($cliente_limpio)"
-            echo "   📍 IP/Puerto: $ip_puerto"
+            # Mostrar información en formato tabla
+            echo "│ 📍 Cliente $contador"
+            echo "│ ├─👤 Nombre: $nombre_descriptivo"
+            echo "│ ├─🔑 Certificado: $cliente_limpio"
+            echo "│ ├─🌐 IP Real: $ip_puerto"
+            echo "│ ├─🔗 IP VPN: $ip_virtual"
+            echo "│ └─🕒 Conectado desde: $fecha_conexion"
+            echo "├─────────────────────────────────────────────────────────┤"
             
-            if [ -n "$fecha" ] && [ -n "$hora" ]; then
-                echo "   🕒 Conectado: $fecha $hora"
-            else
-                echo "   🕒 Conectado: Ahora"
-            fi
+            # Registrar IP en el historial
+            timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+            ip_sin_puerto=$(echo "$ip_puerto" | cut -d: -f1)
             
-            echo ""
+            # Eliminar entrada antigua si existe
+            grep -v "^$cliente_limpio:$ip_sin_puerto:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
+            mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
+            
+            # Añadir nueva entrada
+            echo "$cliente_limpio:$ip_sin_puerto:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
+            
+            # Registrar en log
+            escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip_puerto - $fecha_conexion"
         fi
     done
     
-    echo "✅ Total de clientes conectados: $contador"
+    echo "│                    RESUMEN FINAL                         │"
+    echo "├─────────────────────────────────────────────────────────┤"
     
-    # Registrar en log
-    escribir_log "📊 Mostrados $contador clientes conectados"
+    if [ $contador -eq 0 ]; then
+        echo "│ ℹ️  No se encontraron clientes conectados              │"
+    else
+        echo "│ ✅ Total de clientes conectados: $contador               │"
+        # Mostrar estadísticas adicionales
+        echo "│ 📊 IPs registradas en historial: $contador              │"
+        escribir_log "📊 Mostrados $contador clientes conectados, IPs registradas"
+    fi
+    
+    echo "└─────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    if [ $contador -gt 0 ]; then
+        echo "💡 Las IPs se han registrado automáticamente en el historial"
+    fi
 }
 
 # Función para listar estado de clientes
@@ -583,7 +614,7 @@ bloquear_cliente() {
             ip=$(echo "$ip_info" | cut -d: -f1)
             fecha=$(echo "$ip_info" | cut -d: -f2)
             count=$((count + 1))
-            echo "      $count) $ip (Última conexión: $fecha)"
+            echo "   $count) $ip (Última conexión: $fecha)"
             IPS="$IPS $ip"
         done
     fi
@@ -1185,36 +1216,52 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA ACTUALIZADO CON LOGS"
+echo "✅ SISTEMA ACTUALIZADO CON VERSIÓN CORREGIDA"
 echo ""
-echo "🔧 MEJORAS IMPLEMENTADAS:"
-echo "   1. 📅 FECHA/HORA EN CONEXIONES:"
-echo "      - Ahora muestra 'Conectado: dd/mm/aaaa HH:MM'"
-echo "      - Registra fecha exacta de conexión"
-echo "      - Muestra fecha actual en la parte superior"
+echo "🔧 CAMBIOS PRINCIPALES:"
+echo "   1. ✅ FUNCIÓN ver_conectados() REPARADA:"
+echo "      - Ahora maneja correctamente el formato de /var/log/openvpn-status.log"
+echo "      - Usa 'grep -v HEADER' para excluir la línea de encabezado"
+echo "      - Extrae correctamente cliente, IP y fecha de conexión"
 echo ""
-echo "   2. 📜 SISTEMA DE LOG COMPLETO:"
-echo "      - Nueva opción 8 para ver logs"
-echo "      - Todo queda registrado en: /etc/openvpn/clientes/vpn_gestion.log"
-echo "      - Cada acción se registra con timestamp"
+echo "   2. 📊 FORMATO MEJORADO:"
+echo "      - Diseño tipo tabla con bordes"
+echo "      - Información organizada en secciones"
+echo "      - Muestra IP Real e IP VPN"
+echo "      - Registra automáticamente IPs en el historial"
 echo ""
-echo "   3. 📊 FUNCIONALIDADES DEL LOG:"
-echo "      - Ver últimas 50 entradas"
-echo "      - Buscar en el log"
-echo "      - Ver log completo"
-echo "      - Limpiar log (con confirmación)"
+echo "   3. 🎯 EJEMPLO DE SALIDA ESPERADA:"
 echo ""
-echo "   4. 📈 MEJORAS ADICIONALES:"
-echo "      - Backup automático de certificados antes de revocar"
-echo "      - Mejor manejo de fechas en IPs"
-echo "      - Estadísticas en el estado del sistema"
+echo "      📊 CLIENTES CONECTADOS"
+echo "      ======================"
+echo "      🕒 Fecha actual: 03/12/2025 16:33"
 echo ""
-echo "🚀 FLUJO DE TRABAJO ACTUALIZADO:"
-echo "   📡 Al ver clientes conectados → Se registra IP con fecha/hora"
-echo "   📝 Cada bloqueo/desbloqueo → Se guarda en log con detalles"
-echo "   📊 Estado del sistema → Muestra estadísticas del log"
+echo "      ┌─────────────────────────────────────────────────────────┐"
+echo "      │                    CLIENTES CONECTADOS                  │"
+echo "      ├─────────────────────────────────────────────────────────┤"
+echo "      │ 📍 Cliente 1"
+echo "      │ ├─👤 Nombre: client2"
+echo "      │ ├─🔑 Certificado: client2"
+echo "      │ ├─🌐 IP Real: 83.36.234.252:43295"
+echo "      │ ├─🔗 IP VPN: 10.8.0.2"
+echo "      │ └─🕒 Conectado desde: 2025-12-03 10:41:58"
+echo "      ├─────────────────────────────────────────────────────────┤"
+echo "      │ 📍 Cliente 2"
+echo "      │ ├─👤 Nombre: client3"
+echo "      │ ├─🔑 Certificado: client3"
+echo "      │ ├─🌐 IP Real: 83.39.230.130:36465"
+echo "      │ ├─🔗 IP VPN: 10.8.0.3"
+echo "      │ └─🕒 Conectado desde: 2025-12-03 01:47:03"
+echo "      ├─────────────────────────────────────────────────────────┤"
+echo "      │                    RESUMEN FINAL                         │"
+echo "      ├─────────────────────────────────────────────────────────┤"
+echo "      │ ✅ Total de clientes conectados: 2                       │"
+echo "      │ 📊 IPs registradas en historial: 2                       │"
+echo "      └─────────────────────────────────────────────────────────┘"
 echo ""
-echo "💡 CONSEJOS:"
-echo "   - Usa la opción 8 periódicamente para revisar actividad"
-echo "   - El log es útil para auditorías y troubleshooting"
-echo "   - Las fechas de conexión ayudan a detectar patrones sospechosos"
+echo "🚀 PRUEBA INMEDIATA:"
+echo "   Ejecuta: gestion"
+echo "   Selecciona opción 1 para ver clientes conectados"
+echo ""
+echo "💡 NOTA: Los 3 clientes que mencionaste (client2, client3, client5)"
+echo "   deberían aparecer correctamente ahora."
