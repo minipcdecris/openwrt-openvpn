@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO SISTEMA - ELIMINANDO RESUMEN VACÍO"
-echo "================================================="
+echo "🔧 ACTUALIZANDO SISTEMA - SOPORTE PARA FORMATO CSV"
+echo "=================================================="
 
 # Actualizar el script
 cat > /usr/bin/gestion << 'EOF'
@@ -210,7 +210,7 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# Función para ver clientes conectados - VERSIÓN SIN RESUMEN VACÍO
+# Función para ver clientes conectados - VERSIÓN COMPATIBLE CON FORMATO CSV
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
@@ -231,63 +231,132 @@ ver_conectados() {
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
-    # Buscar líneas CLIENT_LIST con datos reales (excluyendo la línea HEADER)
-    if ! grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "HEADER" | grep -q "."; then
-        echo "ℹ️  No hay clientes conectados en este momento"
-        escribir_log "ℹ️  No hay clientes conectados"
+    # Detectar el formato del archivo
+    # Formato 1: CSV con comas (nuevo formato)
+    # Formato 2: Columnas con tabs (formato antiguo)
+    
+    contador=0
+    
+    # PRIMERO: Intentar detectar formato CSV (nuevo formato)
+    if grep -q "^Common Name," "$STATUS_FILE"; then
+        escribir_log "📋 Detectado formato CSV en openvpn-status.log"
+        
+        # Saltar la línea de encabezado y procesar cada línea de cliente
+        # Formato: Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since
+        tail -n +5 "$STATUS_FILE" | head -n -6 | while IFS=, read -r cliente ip_puerto bytes_recv bytes_sent fecha_hora; do
+            # Verificar que no sea una línea vacía o del ROUTING TABLE
+            if [ -n "$cliente" ] && [ "$cliente" != "ROUTING TABLE" ] && [ "$cliente" != "GLOBAL STATS" ] && [ "$cliente" != "END" ]; then
+                cliente_limpio=$(echo "$cliente" | sed 's|/CN=||')
+                nombre_descriptivo=$(obtener_nombre "$cliente_limpio")
+                
+                # Incrementar contador
+                contador=$((contador + 1))
+                
+                # Extraer IP virtual del ROUTING TABLE si está disponible
+                ip_virtual="No disponible"
+                if grep -q "^[0-9a-f:]*@[0-9]*,$cliente," "$STATUS_FILE"; then
+                    ip_virtual=$(grep "^[0-9a-f:]*@[0-9]*,$cliente," "$STATUS_FILE" | cut -d, -f1)
+                fi
+                
+                # Mostrar información en formato simplificado
+                echo "    📍 Cliente $contador"
+                echo "    👤 Nombre: $nombre_descriptivo"
+                echo "    🔑 Certificado: $cliente_limpio"
+                echo "    🌐 IP Real: $ip_puerto"
+                echo "    🔗 IP VPN: $ip_virtual"
+                echo "    🕒 Conectado desde: $fecha_hora"
+                echo "    📥 Bytes recibidos: $bytes_recv"
+                echo "    📤 Bytes enviados: $bytes_sent"
+                echo ""
+                
+                # Registrar IP en el historial
+                timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                ip_sin_puerto=$(echo "$ip_puerto" | cut -d: -f1)
+                
+                # Eliminar entrada antigua si existe
+                grep -v "^$cliente_limpio:$ip_sin_puerto:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
+                mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
+                
+                # Añadir nueva entrada
+                echo "$cliente_limpio:$ip_sin_puerto:$timestamp:$fecha_hora" >> "$IP_HISTORY_FILE"
+                
+                # Registrar en log
+                escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip_puerto - $fecha_hora"
+            fi
+        done
+        
+    # SEGUNDO: Intentar detectar formato antiguo (con CLIENT_LIST)
+    elif grep -q "^CLIENT_LIST" "$STATUS_FILE"; then
+        escribir_log "📋 Detectado formato antiguo (CLIENT_LIST) en openvpn-status.log"
+        
+        # Procesar cada cliente (excluyendo la línea HEADER)
+        grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "HEADER" | while read linea; do
+            # Extraer datos usando awk (el formato tiene columnas separadas por tabs)
+            cliente=$(echo "$linea" | awk '{print $2}')
+            ip_puerto=$(echo "$linea" | awk '{print $3}')
+            ip_virtual=$(echo "$linea" | awk '{print $4}')
+            
+            # Extraer el timestamp Unix (columna 9) o fecha (dependiendo del formato)
+            if echo "$linea" | awk '{print $9}' | grep -q "^[0-9]\{10\}$"; then
+                # Es un timestamp Unix
+                timestamp_unix=$(echo "$linea" | awk '{print $9}')
+                fecha_conexion=$(timestamp_a_fecha "$timestamp_unix")
+            else
+                # Es una fecha ya formateada
+                fecha_conexion=$(echo "$linea" | awk '{print $8" "$9}')
+            fi
+            
+            if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
+                cliente_limpio=$(echo "$cliente" | sed 's|/CN=||')
+                nombre_descriptivo=$(obtener_nombre "$cliente_limpio")
+                
+                # Incrementar contador
+                contador=$((contador + 1))
+                
+                # Mostrar información en formato simplificado
+                echo "    📍 Cliente $contador"
+                echo "    👤 Nombre: $nombre_descriptivo"
+                echo "    🔑 Certificado: $cliente_limpio"
+                echo "    🌐 IP Real: $ip_puerto"
+                echo "    🔗 IP VPN: $ip_virtual"
+                echo "    🕒 Conectado desde: $fecha_conexion"
+                echo ""
+                
+                # Registrar IP en el historial
+                timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                ip_sin_puerto=$(echo "$ip_puerto" | cut -d: -f1)
+                
+                # Eliminar entrada antigua si existe
+                grep -v "^$cliente_limpio:$ip_sin_puerto:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
+                mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
+                
+                # Añadir nueva entrada
+                echo "$cliente_limpio:$ip_sin_puerto:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
+                
+                # Registrar en log
+                escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip_puerto - $fecha_conexion"
+            fi
+        done
+        
+    else
+        # Formato desconocido
+        echo "❌ Formato de archivo openvpn-status.log no reconocido"
+        echo ""
+        echo "💡 FORMATOS SOPORTADOS:"
+        echo "   1. CSV con comas: 'Common Name,Real Address,...'"
+        echo "   2. Formato antiguo: 'CLIENT_LIST' con tabs"
+        echo ""
+        echo "📄 CONTENIDO DEL ARCHIVO:"
+        head -20 "$STATUS_FILE"
+        escribir_log "❌ Formato de openvpn-status.log no reconocido"
         return
     fi
     
-    # Contador de clientes
-    contador=0
-    
-    # Procesar cada cliente (excluyendo la línea HEADER)
-    grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "HEADER" | while read linea; do
-        # Extraer datos usando awk (el formato tiene columnas separadas por tabs)
-        cliente=$(echo "$linea" | awk '{print $2}')
-        ip_puerto=$(echo "$linea" | awk '{print $3}')
-        ip_virtual=$(echo "$linea" | awk '{print $4}')
-        
-        # Extraer el timestamp Unix (columna 9)
-        timestamp_unix=$(echo "$linea" | awk '{print $9}')
-        
-        if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
-            cliente_limpio=$(echo "$cliente" | sed 's|/CN=||')
-            nombre_descriptivo=$(obtener_nombre "$cliente_limpio")
-            
-            # Incrementar contador
-            contador=$((contador + 1))
-            
-            # Convertir timestamp Unix a fecha legible
-            fecha_conexion=$(timestamp_a_fecha "$timestamp_unix")
-            
-            # Mostrar información en formato simplificado
-            echo "    📍 Cliente $contador"
-            echo "    👤 Nombre: $nombre_descriptivo"
-            echo "    🔑 Certificado: $cliente_limpio"
-            echo "    🌐 IP Real: $ip_puerto"
-            echo "    🔗 IP VPN: $ip_virtual"
-            echo "    🕒 Conectado desde: $fecha_conexion"
-            echo ""
-            
-            # Registrar IP en el historial
-            timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-            ip_sin_puerto=$(echo "$ip_puerto" | cut -d: -f1)
-            
-            # Eliminar entrada antigua si existe
-            grep -v "^$cliente_limpio:$ip_sin_puerto:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
-            mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
-            
-            # Añadir nueva entrada (guardamos la fecha legible)
-            echo "$cliente_limpio:$ip_sin_puerto:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
-            
-            # Registrar en log
-            escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip_puerto - $fecha_conexion"
-        fi
-    done
-    
     # Solo mostrar resumen si hay clientes conectados
-    if [ $contador -gt 0 ]; then
+    if [ $contador -eq 0 ]; then
+        echo "ℹ️  No hay clientes conectados en este momento"
+        escribir_log "ℹ️  No hay clientes conectados"
+    else
         echo "📊 RESUMEN:"
         echo "    ✅ Total de clientes conectados: $contador"
         echo "    📊 IPs registradas en historial: $contador"
@@ -1228,25 +1297,40 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA ACTUALIZADO - RESUMEN VACÍO ELIMINADO"
+echo "✅ SISTEMA ACTUALIZADO - SOPORTE PARA FORMATO CSV"
 echo ""
-echo "🔧 CAMBIOS REALIZADOS EN ver_conectados():"
+echo "🔧 CAMBIOS PRINCIPALES EN ver_conectados():"
 echo ""
-echo "   ANTES (cuando no hay clientes):"
-echo "   📊 RESUMEN:"
-echo "       ℹ️  No se encontraron clientes conectados"
+echo "   1. ✅ DETECCIÓN AUTOMÁTICA DE FORMATO:"
+echo "      - Detecta si el archivo usa formato CSV (con comas)"
+echo "      - Detecta si el archivo usa formato antiguo (con tabs)"
+echo "      - Funciona con ambas versiones de OpenVPN"
 echo ""
-echo "   AHORA (cuando no hay clientes):"
-echo "   ℹ️  No hay clientes conectados en este momento"
-echo "   (y ya no aparece la sección de RESUMEN)"
+echo "   2. 📋 PROCESAMIENTO DE FORMATO CSV:"
+echo "      - Lee líneas con formato: 'client1,83.60.168.35:38800,3122,3549,2025-12-10 01:19:37'"
+echo "      - Extrae: Common Name, IP:Puerto, Bytes recibidos/enviados, Fecha"
+echo "      - Busca la IP virtual en la sección ROUTING TABLE"
 echo ""
-echo "   CUANDO SÍ HAY CLIENTES, se muestra el resumen normalmente:"
-echo "   📊 RESUMEN:"
-echo "       ✅ Total de clientes conectados: 3"
-echo "       📊 IPs registradas en historial: 3"
+echo "   3. 🎯 EJEMPLO DE SALIDA PARA TU ARCHIVO:"
 echo ""
-echo "   💡 Solo se muestra el resumen si hay al menos 1 cliente conectado"
+echo "      📊 CLIENTES CONECTADOS"
+echo "      ======================"
+echo "      🕒 Fecha actual: 10/12/2025 01:22:00"
+echo ""
+echo "      📍 Cliente 1"
+echo "      👤 Nombre: client1"
+echo "      🔑 Certificado: client1"
+echo "      🌐 IP Real: 83.60.168.35:38800"
+echo "      🔗 IP VPN: 80:af:ca:d9:4a:81@0"
+echo "      🕒 Conectado desde: 2025-12-10 01:19:37"
+echo "      📥 Bytes recibidos: 3122"
+echo "      📤 Bytes enviados: 3549"
+echo ""
+echo "   4. 📊 RESULTADO ESPERADO:"
+echo "      - Ahora debería detectar correctamente a 'client1'"
+echo "      - Muestra toda la información disponible"
+echo "      - Registra la IP en el historial automáticamente"
 echo ""
 echo "🚀 PRUEBA INMEDIATA:"
 echo "   Ejecuta: gestion"
-echo "   Selecciona opción 1 para ver el nuevo comportamiento"
+echo "   Selecciona opción 1 - Deberías ver a client1 conectado"
