@@ -222,7 +222,7 @@ ver_conectados() {
     fi
     
     if ! grep -q "^CLIENT_LIST," "$STATUS_FILE"; then
-        echo "ℹ️  No hay clientes conectados en este momento"
+        echo ""
         escribir_log "ℹ️  No hay clientes conectados"
         return
     fi
@@ -285,7 +285,7 @@ ver_conectados() {
     done
     
     if [ $contador -eq 0 ]; then
-        echo "ℹ️  No hay clientes conectados en este momento"
+        echo ""
         escribir_log "ℹ️  No hay clientes conectados"
     else
         echo "📊 RESUMEN:"
