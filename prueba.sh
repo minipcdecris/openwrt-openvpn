@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 ACTUALIZANDO SISTEMA - SOPORTE OPENVPN 2.6+"
-echo "=============================================="
+echo "🔧 ACTUALIZANDO SISTEMA - CORRECCIÓN DE SINTAXIS"
+echo "================================================"
 
 # Actualizar el script
 cat > /usr/bin/gestion << 'EOF'
@@ -25,11 +25,8 @@ touch "$LOG_FILE"
 timestamp_a_fecha() {
     timestamp="$1"
     if [ -n "$timestamp" ] && [ "$timestamp" -gt 0 ] 2>/dev/null; then
-        # Intentar convertir con date si está disponible
         if command -v date >/dev/null 2>&1; then
-            # Para sistemas GNU (Linux)
             date -d "@$timestamp" '+%d/%m/%Y %H:%M:%S' 2>/dev/null || \
-            # Para sistemas BSD (macOS)
             date -r "$timestamp" '+%d/%m/%Y %H:%M:%S' 2>/dev/null || \
             echo "Fecha desconocida"
         else
@@ -92,30 +89,24 @@ revocar_certificado() {
     echo "   📝 Revocando certificado de $cliente..."
     escribir_log "📝 Iniciando revocación de certificado para $cliente"
     
-    # Cambiar al directorio easy-rsa
     cd "$EASYRSA_DIR" 2>/dev/null || return 1
     
-    # Verificar si el certificado existe
     if [ ! -f "pki/issued/$cliente.crt" ]; then
         escribir_log "⚠️  Certificado $cliente.crt no encontrado"
         echo "   ⚠️  Certificado $cliente.crt no encontrado"
         return 1
     fi
     
-    # Hacer backup antes de revocar
     if [ ! -f "pki/issued/$cliente.crt.backup" ]; then
         cp "pki/issued/$cliente.crt" "pki/issued/$cliente.crt.backup" 2>/dev/null
         cp "pki/private/$cliente.key" "pki/private/$cliente.key.backup" 2>/dev/null
         escribir_log "✅ Backup de certificado $cliente creado"
     fi
     
-    # Revocar certificado
     if [ -f "easyrsa" ]; then
         echo "yes" | ./easyrsa revoke "$cliente" > /dev/null 2>&1
         if [ $? -eq 0 ]; then
-            # Actualizar CRL
             ./easyrsa gen-crl > /dev/null 2>&1
-            # Copiar CRL a OpenVPN
             cp pki/crl.pem /etc/openvpn/ 2>/dev/null
             escribir_log "✅ Certificado de $cliente revocado exitosamente"
             echo "   ✅ Certificado revocado"
@@ -144,21 +135,16 @@ restaurar_certificado() {
     
     cd "$EASYRSA_DIR" 2>/dev/null || return 1
     
-    # Verificar si hay backup del certificado
     if [ -f "pki/issued/$cliente.crt.backup" ]; then
-        # Restaurar desde backup
         cp "pki/issued/$cliente.crt.backup" "pki/issued/$cliente.crt" 2>/dev/null
         cp "pki/private/$cliente.key.backup" "pki/private/$cliente.key" 2>/dev/null
         
-        # Eliminar línea de revocación del índice
         sed -i "/\/CN=$cliente$/d" pki/index.txt 2>/dev/null
-        # Añadir como válido
         serial=$(openssl x509 -in "pki/issued/$cliente.crt" -serial -noout 2>/dev/null | cut -d= -f2)
         if [ -n "$serial" ]; then
             echo "V\t$(date +'%y%m%d%H%M%SZ')\t\t$serial\tunknown\t/CN=$cliente" >> pki/index.txt
         fi
         
-        # Actualizar CRL
         ./easyrsa gen-crl > /dev/null 2>&1
         cp pki/crl.pem /etc/openvpn/ 2>/dev/null
         escribir_log "✅ Certificado de $cliente restaurado exitosamente"
@@ -210,14 +196,13 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# Función para ver clientes conectados - VERSIÓN PARA OPENVPN 2.6+ (formato CSV extendido)
+# Función para ver clientes conectados - VERSIÓN SIMPLIFICADA Y CORREGIDA
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
     echo "======================"
     echo ""
     
-    # Usar el archivo correcto
     if [ -f "/var/log/openvpn-status.log" ]; then
         STATUS_FILE="/var/log/openvpn-status.log"
     else
@@ -226,19 +211,16 @@ ver_conectados() {
         return
     fi
     
-    # Obtener fecha actual
     fecha_hora_actual=$(date '+%d/%m/%Y %H:%M:%S')
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
-    # Verificar si el archivo está vacío
     if [ ! -s "$STATUS_FILE" ]; then
         echo "ℹ️  El archivo openvpn-status.log está vacío"
         escribir_log "ℹ️  openvpn-status.log está vacío"
         return
     fi
     
-    # Detectar si es el formato CSV extendido de OpenVPN 2.6+
     if ! grep -q "^CLIENT_LIST," "$STATUS_FILE"; then
         echo "ℹ️  No hay clientes conectados en este momento"
         escribir_log "ℹ️  No hay clientes conectados"
@@ -247,33 +229,23 @@ ver_conectados() {
     
     contador=0
     
-    # Procesar cada línea CLIENT_LIST
+    # Procesar cada línea CLIENT_LIST - VERSIÓN SIMPLIFICADA
     grep "^CLIENT_LIST," "$STATUS_FILE" | while IFS= read -r linea; do
-        # Eliminar el prefijo CLIENT_LIST,
-        datos=$(echo "$linea" | sed 's/^CLIENT_LIST,//')
+        # Extraer datos de forma simple
+        cliente=$(echo "$linea" | cut -d, -f2)
+        ip_real=$(echo "$linea" | cut -d, -f3)
+        ip_virtual=$(echo "$linea" | cut -d, -f4)
+        bytes_recv=$(echo "$linea" | cut -d, -f6)
+        bytes_sent=$(echo "$linea" | cut -d, -f7)
+        fecha_conexion=$(echo "$linea" | cut -d, -f8)
+        cipher=$(echo "$linea" | cut -d, -f13)
         
-        # Dividir por comas (tenemos 13 columnas según el HEADER)
-        IFS=',' read -r cliente ip_real ip_virtual ip_virtual6 bytes_recv bytes_sent fecha_conexion timestamp_conexion username client_id peer_id cipher <<EOF
-$datos
-EOF
-        
-        # Verificar que tenemos datos válidos (no UNDEF y con IP real)
         if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ] && [ -n "$ip_real" ]; then
             cliente_limpio=$(echo "$cliente" | sed 's|/CN=||')
             nombre_descriptivo=$(obtener_nombre "$cliente_limpio")
             
-            # Incrementar contador
             contador=$((contador + 1))
             
-            # Formatear bytes para lectura humana (si numfmt está disponible)
-            bytes_recv_humano="${bytes_recv}B"
-            bytes_sent_humano="${bytes_sent}B"
-            if command -v numfmt >/dev/null 2>&1; then
-                bytes_recv_humano=$(numfmt --to=iec --suffix=B --format="%.2f" "$bytes_recv" 2>/dev/null || echo "${bytes_recv}B")
-                bytes_sent_humano=$(numfmt --to=iec --suffix=B --format="%.2f" "$bytes_sent" 2>/dev/null || echo "${bytes_sent}B")
-            fi
-            
-            # Mostrar información en formato simplificado
             echo "    📍 Cliente $contador"
             echo "    👤 Nombre: $nombre_descriptivo"
             echo "    🔑 Certificado: $cliente_limpio"
@@ -286,30 +258,32 @@ EOF
             fi
             
             echo "    🕒 Conectado desde: $fecha_conexion"
-            echo "    📊 Tráfico: ▼ $bytes_recv_humano / ▲ $bytes_sent_humano"
+            
+            # Formatear bytes si es posible
+            if command -v numfmt >/dev/null 2>&1 && [ -n "$bytes_recv" ] && [ -n "$bytes_sent" ]; then
+                bytes_recv_humano=$(numfmt --to=iec --suffix=B "$bytes_recv" 2>/dev/null || echo "${bytes_recv}B")
+                bytes_sent_humano=$(numfmt --to=iec --suffix=B "$bytes_sent" 2>/dev/null || echo "${bytes_sent}B")
+                echo "    📊 Tráfico: ▼ $bytes_recv_humano / ▲ $bytes_sent_humano"
+            fi
             
             if [ -n "$cipher" ] && [ "$cipher" != "" ]; then
                 echo "    🔐 Cifrado: $cipher"
             fi
             echo ""
             
-            # Registrar IP en el historial
+            # Registrar en historial
             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
             ip_sin_puerto=$(echo "$ip_real" | cut -d: -f1)
             
-            # Eliminar entrada antigua si existe
             grep -v "^$cliente_limpio:$ip_sin_puerto:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
             mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
             
-            # Añadir nueva entrada
             echo "$cliente_limpio:$ip_sin_puerto:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
             
-            # Registrar en log
             escribir_log "📡 Cliente $nombre_descriptivo ($cliente_limpio) conectado desde $ip_real - $fecha_conexion"
         fi
     done
     
-    # Solo mostrar resumen si hay clientes conectados
     if [ $contador -eq 0 ]; then
         echo "ℹ️  No hay clientes conectados en este momento"
         escribir_log "ℹ️  No hay clientes conectados"
@@ -319,7 +293,6 @@ EOF
         echo "    📊 IPs registradas en historial: $contador"
         echo ""
         echo "💡 Las IPs se han registrado automáticamente en el historial"
-        
         escribir_log "📊 Mostrados $contador clientes conectados, IPs registradas"
     fi
 }
@@ -332,13 +305,11 @@ listar_clientes() {
     echo ""
     escribir_log "📋 Mostrando estado completo de clientes"
     
-    # Buscar base de datos
     INDEX_FILE=""
     EASYRSA_DIR=$(encontrar_easyrsa)
     if [ -n "$EASYRSA_DIR" ] && [ -f "$EASYRSA_DIR/pki/index.txt" ]; then
         INDEX_FILE="$EASYRSA_DIR/pki/index.txt"
     else
-        # Buscar en ubicaciones alternativas
         for dir in /etc/easy-rsa/pki /etc/openvpn/easy-rsa/pki /etc/openvpn; do
             if [ -f "$dir/index.txt" ]; then
                 INDEX_FILE="$dir/index.txt"
@@ -358,16 +329,13 @@ listar_clientes() {
     grep "^V" "$INDEX_FILE" > /tmp/activos.txt 2>/dev/null
     
     while read linea; do
-        # Extraer el CN (Common Name)
         if echo "$linea" | grep -q "/CN="; then
             cliente=$(echo "$linea" | sed 's/.*\/CN=//' | awk '{print $1}')
         else
             cliente=$(echo "$linea" | awk '{print $NF}')
         fi
         
-        # FILTRAR: No mostrar "server"
         if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
-            # Verificar si está bloqueado en nuestro sistema
             bloqueado_nuestro=""
             if grep -q "^$cliente:" "$SUSPENDED_FILE"; then
                 bloqueado_nuestro="🚫"
@@ -392,16 +360,13 @@ listar_clientes() {
     grep "^R" "$INDEX_FILE" > /tmp/revocados.txt 2>/dev/null
     
     while read linea; do
-        # Extraer el CN (Common Name)
         if echo "$linea" | grep -q "/CN="; then
             cliente=$(echo "$linea" | sed 's/.*\/CN=//' | awk '{print $1}')
         else
             cliente=$(echo "$linea" | awk '{print $NF}')
         fi
         
-        # FILTRAR: No mostrar "server"
         if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
-            # Verificar si está bloqueado en nuestro sistema
             bloqueado_nuestro=""
             if grep -q "^$cliente:" "$SUSPENDED_FILE"; then
                 bloqueado_nuestro="🚫"
@@ -429,7 +394,6 @@ listar_clientes() {
             if [ -n "$cliente" ]; then
                 bloqueados_sistema=$((bloqueados_sistema + 1))
                 nombre_descriptivo=$(obtener_nombre "$cliente")
-                # Verificar estado del certificado
                 estado_cert=$(estado_cliente "$cliente")
                 estado_icono="❓"
                 if [ "$estado_cert" = "revocado" ]; then
@@ -477,16 +441,13 @@ bloquear_ip() {
         return 1
     fi
     
-    # Verificar si ya está bloqueada
     if iptables -nL INPUT 2>/dev/null | grep -q "DROP.*$ip"; then
         escribir_log "ℹ️  IP $ip ya estaba bloqueada para $cliente"
         echo "   ℹ️  $ip ya estaba bloqueada"
         return 0
     fi
     
-    # Bloquear IP
     if iptables -I INPUT -s "$ip" -j DROP 2>/dev/null; then
-        # Guardar para persistencia
         mkdir -p /etc/openvpn
         if ! grep -q "^$ip:" /etc/openvpn/blocked_ips.txt 2>/dev/null; then
             echo "$ip:$cliente:$(date '+%Y-%m-%d %H:%M:%S')" >> /etc/openvpn/blocked_ips.txt
@@ -508,7 +469,6 @@ desbloquear_ip() {
         escribir_log "🔓 IP $ip desbloqueada"
     fi
     
-    # Eliminar de persistencia
     if [ -f "/etc/openvpn/blocked_ips.txt" ]; then
         grep -v "^$ip:" /etc/openvpn/blocked_ips.txt > /tmp/blocked.tmp
         mv /tmp/blocked.tmp /etc/openvpn/blocked_ips.txt 2>/dev/null
@@ -537,7 +497,6 @@ bloquear_cliente() {
         return
     fi
     
-    # Listar clientes activos (EXCLUYENDO SERVER)
     echo "Clientes disponibles para BLOQUEAR:"
     echo ""
     
@@ -547,23 +506,19 @@ bloquear_cliente() {
         echo "   ℹ️  No se encuentra easy-rsa, solo se bloquearán IPs"
     fi
     
-    # Crear lista de clientes activos
     if [ -n "$EASYRSA_DIR" ] && [ -f "$EASYRSA_DIR/pki/index.txt" ]; then
         grep "^V" "$EASYRSA_DIR/pki/index.txt" 2>/dev/null | while read linea; do
-            # Extraer el CN
             if echo "$linea" | grep -q "/CN="; then
                 cliente=$(echo "$linea" | sed 's/.*\/CN=//' | awk '{print $1}')
             else
                 cliente=$(echo "$linea" | awk '{print $NF}')
             fi
             
-            # FILTRAR: No incluir "server"
             if [ -n "$cliente" ] && [ "$cliente" != "unknown" ] && [ "$cliente" != "server" ]; then
                 echo "$cliente" >> /tmp/clientes_raw.txt
             fi
         done
     else
-        # Si no hay easy-rsa, usar clientes con IPs registradas
         cut -d: -f1 "$IP_HISTORY_FILE" 2>/dev/null | sort -u > /tmp/clientes_raw.txt
     fi
     
@@ -573,18 +528,15 @@ bloquear_cliente() {
         return
     fi
     
-    # Mostrar clientes numerados
     num=0
     while read cliente; do
         num=$((num + 1))
         nombre_descriptivo=$(obtener_nombre "$cliente")
-        # Verificar si ya está bloqueado
         if grep -q "^$cliente:" "$SUSPENDED_FILE"; then
             echo "   $num) $nombre_descriptivo ($cliente) [YA BLOQUEADO]"
         else
             echo "   $num) $nombre_descriptivo ($cliente)"
         fi
-        # Guardar para referencia
         echo "$num:$cliente" >> /tmp/clientes_index.txt
     done < /tmp/clientes_raw.txt
     
@@ -592,7 +544,6 @@ bloquear_cliente() {
     echo -n "Selecciona cliente (número): "
     read seleccion
     
-    # Obtener cliente seleccionado
     cliente_seleccionado=""
     if [ -f /tmp/clientes_index.txt ]; then
         while IFS=: read -r num cliente; do
@@ -603,7 +554,6 @@ bloquear_cliente() {
         done < /tmp/clientes_index.txt
     fi
     
-    # Limpiar archivos temporales
     rm -f /tmp/clientes_raw.txt /tmp/clientes_index.txt 2>/dev/null
     
     if [ -z "$cliente_seleccionado" ]; then
@@ -612,7 +562,6 @@ bloquear_cliente() {
         return
     fi
     
-    # Verificar si ya está bloqueado
     if grep -q "^$cliente_seleccionado:" "$SUSPENDED_FILE"; then
         echo ""
         echo "⚠️  Este cliente YA está bloqueado en nuestro sistema"
@@ -629,7 +578,6 @@ bloquear_cliente() {
     echo "🔍 Buscando IPs de: $cliente_seleccionado"
     escribir_log "🔍 Buscando IPs para cliente $cliente_seleccionado"
     
-    # Obtener IPs con fechas
     IPS_CON_FECHAS=$(obtener_ips_cliente "$cliente_seleccionado")
     
     if [ -z "$IPS_CON_FECHAS" ]; then
@@ -678,7 +626,6 @@ bloquear_cliente() {
     echo ""
     escribir_log "🛡️  Iniciando bloqueo completo para $cliente_seleccionado"
     
-    # 1. Bloquear IPs
     bloqueadas=0
     if [ -n "$IPS" ]; then
         echo "🔒 Bloqueando IPs en firewall..."
@@ -692,15 +639,12 @@ bloquear_cliente() {
         done
     fi
     
-    # 2. Revocar certificado
     echo ""
     echo "📝 Revocando certificado..."
     revocar_certificado "$cliente_seleccionado"
     
-    # 3. Añadir a lista de bloqueados
     echo ""
     echo "📋 Actualizando lista de bloqueados..."
-    # Eliminar si ya existe
     grep -v "^$cliente_seleccionado:" "$SUSPENDED_FILE" > /tmp/suspended.tmp
     echo "$cliente_seleccionado:$(date '+%Y-%m-%d %H:%M:%S'):completo" >> /tmp/suspended.tmp
     mv /tmp/suspended.tmp "$SUSPENDED_FILE"
@@ -737,7 +681,6 @@ desbloquear_cliente() {
         return
     fi
     
-    # Mostrar clientes bloqueados
     num=0
     while IFS=: read -r cliente fecha tipo resto; do
         if [ -n "$cliente" ]; then
@@ -752,7 +695,6 @@ desbloquear_cliente() {
     echo -n "Selecciona cliente (número): "
     read seleccion
     
-    # Obtener cliente seleccionado
     cliente_seleccionado=""
     tipo_bloqueo=""
     if [ -f /tmp/bloqueados_index.txt ]; then
@@ -777,7 +719,6 @@ desbloquear_cliente() {
     echo ""
     escribir_log "🔓 Iniciando desbloqueo para $cliente_seleccionado"
     
-    # 1. Desbloquear IPs
     echo "🔓 Desbloqueando IPs..."
     IPS=$(obtener_ips_cliente "$cliente_seleccionado" | cut -d: -f1)
     if [ -n "$IPS" ]; then
@@ -791,14 +732,12 @@ desbloquear_cliente() {
         echo "   ℹ️  No hay IPs registradas para desbloquear"
     fi
     
-    # 2. Restaurar certificado (si el bloqueo fue completo)
     if [ "$tipo_bloqueo" = "completo" ] || [ -z "$tipo_bloqueo" ]; then
         echo ""
         echo "📝 Restaurando certificado..."
         restaurar_certificado "$cliente_seleccionado"
     fi
     
-    # 3. Eliminar de lista de bloqueados
     echo ""
     echo "📋 Eliminando de lista de bloqueados..."
     grep -v "^$cliente_seleccionado:" "$SUSPENDED_FILE" > /tmp/suspended.tmp
@@ -856,13 +795,10 @@ gestionar_nombres() {
                 echo -n "Nombre descriptivo: "
                 read nombre
                 
-                # Limpiar /CN= si lo pusieron
                 cliente=$(echo "$cliente" | sed 's|/CN=||')
                 
                 if [ -n "$cliente" ] && [ -n "$nombre" ]; then
-                    # Crear archivo temporal sin este cliente
                     grep -v "^$cliente:" "$NOMBRES_FILE" > /tmp/nombres.tmp
-                    # Añadir nuevo
                     echo "$cliente:$nombre" >> /tmp/nombres.tmp
                     mv /tmp/nombres.tmp "$NOMBRES_FILE"
                     echo ""
@@ -901,7 +837,6 @@ gestionar_nombres() {
                 echo -n "Número: "
                 read seleccion
                 
-                # Obtener cliente a eliminar
                 cliente_eliminar=""
                 if [ -f /tmp/eliminar_index.txt ]; then
                     while IFS=: read -r num cliente; do
@@ -961,7 +896,6 @@ registrar_ip_manual() {
     echo -n "Nombre del cliente (SIN /CN=): "
     read cliente
     
-    # Limpiar /CN= si lo pusieron
     cliente=$(echo "$cliente" | sed 's|/CN=||')
     
     if [ -z "$cliente" ]; then
@@ -973,7 +907,6 @@ registrar_ip_manual() {
     echo -n "IP a registrar (ej: 192.168.1.100): "
     read ip
     
-    # Validar IP simple
     if echo "$ip" | grep -qv '^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$'; then
         escribir_log "❌ Registro manual fallido: IP $ip no válida"
         echo "❌ IP no válida"
@@ -983,11 +916,9 @@ registrar_ip_manual() {
     fecha_conexion=$(date '+%d/%m/%Y %H:%M:%S')
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Eliminar entrada antigua si existe
     grep -v "^$cliente:$ip:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
     mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
     
-    # Añadir nueva entrada
     echo "$cliente:$ip:$timestamp:$fecha_conexion" >> "$IP_HISTORY_FILE"
     
     echo ""
@@ -1012,7 +943,6 @@ estado_servicio() {
     
     escribir_log "🔍 Mostrando estado del sistema"
     
-    # OpenVPN
     if pgrep openvpn >/dev/null; then
         echo "✅ OpenVPN: ACTIVO"
         escribir_log "✅ OpenVPN: ACTIVO"
@@ -1021,7 +951,6 @@ estado_servicio() {
         escribir_log "❌ OpenVPN: INACTIVO"
     fi
     
-    # iptables
     echo ""
     echo "🛡️  IPTABLES:"
     if command -v iptables >/dev/null 2>&1; then
@@ -1035,7 +964,6 @@ estado_servicio() {
         escribir_log "❌ IPTABLES: No instalado"
     fi
     
-    # easy-rsa
     echo ""
     echo "📝 EASY-RSA:"
     EASYRSA_DIR=$(encontrar_easyrsa)
@@ -1052,7 +980,6 @@ estado_servicio() {
         escribir_log "⚠️  EASY-RSA: No encontrado"
     fi
     
-    # Estadísticas
     echo ""
     echo "📊 ESTADÍSTICAS GESTOR:"
     nombres=$(grep -c ":" "$NOMBRES_FILE" 2>/dev/null || echo 0)
@@ -1064,13 +991,11 @@ estado_servicio() {
     bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
     echo "   🚫 Clientes bloqueados: $bloqueados"
     
-    # Tamaño del log
     log_size=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
     echo "   📜 Entradas en log: $log_size"
     
     escribir_log "📊 ESTADÍSTICAS: $nombres nombres, $ips IPs, $bloqueados bloqueados, $log_size logs"
     
-    # IPs bloqueadas actuales
     echo ""
     echo "🔒 IPs ACTUALMENTE BLOQUEADAS:"
     if command -v iptables >/dev/null 2>&1; then
@@ -1118,7 +1043,6 @@ ver_log() {
         return
     fi
     
-    # Mostrar las últimas 50 líneas
     tail -50 "$LOG_FILE" | while read linea; do
         echo "   $linea"
     done
@@ -1128,7 +1052,6 @@ ver_log() {
     total_lineas=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
     echo "   Total de entradas: $total_lineas"
     
-    # Obtener fecha de la primera y última entrada
     primera=$(head -1 "$LOG_FILE" 2>/dev/null | cut -c2-11 || echo "Desconocida")
     ultima=$(tail -1 "$LOG_FILE" 2>/dev/null | cut -c2-11 || echo "Desconocida")
     
@@ -1254,24 +1177,25 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA ACTUALIZADO - OPENVPN 2.6+ COMPATIBLE"
+echo "✅ SISTEMA ACTUALIZADO - ERROR DE SINTAXIS CORREGIDO"
 echo ""
-echo "🔧 MEJORAS IMPLEMENTADAS:"
+echo "🔧 CAMBIOS PRINCIPALES:"
 echo ""
-echo "   1. ✅ FORMATO ESPECÍFICO OPENVPN 2.6+:"
-echo "      - Procesa líneas 'CLIENT_LIST,client1,83.60.168.35:41799,10.8.0.2,...'"
-echo "      - Maneja 13 columnas según el HEADER"
+echo "   1. ✅ FUNCIÓN ver_conectados() SIMPLIFICADA:"
+echo "      - Uso de 'cut -d, -fX' en lugar de IFS complejo"
+echo "      - Eliminación de estructuras anidadas problemáticas"
+echo "      - Código más limpio y menos propenso a errores"
 echo ""
-echo "   2. 📊 INFORMACIÓN COMPLETA:"
-echo "      - Nombre del cliente: client1"
-echo "      - IP Real: 83.60.168.35:41799"
-echo "      - IP VPN: 10.8.0.2"
-echo "      - Fecha conexión: 2025-12-10 16:03:08"
-echo "      - Bytes recibidos: 18,284"
-echo "      - Bytes enviados: 251,083,576"
-echo "      - Cifrado: AES-256-GCM"
+echo "   2. 🎯 PROCESAMIENTO DE DATOS:"
+echo "      - cliente: cut -d, -f2"
+echo "      - ip_real: cut -d, -f3"
+echo "      - ip_virtual: cut -d, -f4"
+echo "      - bytes_recv: cut -d, -f6"
+echo "      - bytes_sent: cut -d, -f7"
+echo "      - fecha_conexion: cut -d, -f8"
+echo "      - cipher: cut -d, -f13"
 echo ""
-echo "   3. 🎯 SALIDA ESPERADA:"
+echo "   3. 📊 SALIDA ESPERADA:"
 echo ""
 echo "      📊 CLIENTES CONECTADOS"
 echo "      ======================"
@@ -1286,10 +1210,5 @@ echo "      🕒 Conectado desde: 2025-12-10 16:03:08"
 echo "      📊 Tráfico: ▼ 17.84KB / ▲ 239.5MB"
 echo "      🔐 Cifrado: AES-256-GCM"
 echo ""
-echo "   4. 📈 FORMATO DE BYTES MEJORADO:"
-echo "      - Convierte bytes a KB/MB/GB automáticamente"
-echo "      - Usa 'numfmt' si está disponible"
-echo ""
-echo "🚀 PRUEBA INMEDIATA:"
-echo "   Ejecuta: gestion"
-echo "   Selecciona opción 1 - Deberías ver a client1 con toda la información"
+echo "🚀 EJECUTAR PRUEBA:"
+echo "   gestion"
