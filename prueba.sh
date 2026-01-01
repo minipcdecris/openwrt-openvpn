@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 CORRIGIENDO PARA FORMATO CSV"
+echo "🔧 INSTALANDO VERSIÓN CORREGIDA"
 echo "================================"
 
 cat > /usr/bin/gestion << 'EOF'
@@ -63,7 +63,7 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# FUNCIÓN CORREGIDA - MANEJA FORMATO CSV
+# FUNCIÓN VER_CONECTADOS SIMPLIFICADA Y FUNCIONAL
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
@@ -76,82 +76,73 @@ ver_conectados() {
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
-    # PRIMERO: Usar el archivo principal que SÍ tiene datos
+    # Usar el archivo principal
     STATUS_FILE="/tmp/run/openvpn.VPN_Server.status"
     
     if [ ! -f "$STATUS_FILE" ] || [ ! -s "$STATUS_FILE" ]; then
-        echo "❌ Archivo de estado no encontrado o vacío: $STATUS_FILE"
+        echo "❌ Archivo de estado no encontrado o vacío"
+        echo "   📍 Buscado en: $STATUS_FILE"
         return
     fi
     
     echo "✅ Usando archivo: $STATUS_FILE"
-    echo "📏 Tamaño: $(wc -l < "$STATUS_FILE") líneas"
+    lineas_totales=$(wc -l < "$STATUS_FILE")
+    echo "📏 Tamaño: $lineas_totales líneas"
     echo ""
     
-    # Detectar formato del archivo
+    # Mostrar última actualización
+    if grep -q "^Updated," "$STATUS_FILE"; then
+        updated=$(grep "^Updated," "$STATUS_FILE" | head -1 | cut -d',' -f2)
+        echo "📅 Última actualización: $updated"
+        echo ""
+    fi
+    
+    # Verificar formato
     primera_linea=$(head -1 "$STATUS_FILE")
     
     if echo "$primera_linea" | grep -q "OpenVPN CLIENT LIST"; then
-        echo "📋 Formato detectado: OpenVPN CSV con comas"
+        echo "📋 Formato: CSV con comas (OpenVPN)"
         echo ""
         
-        # Saltar las primeras 2 líneas de encabezado
-        # Línea 1: "OpenVPN CLIENT LIST"
-        # Línea 2: "Updated,fecha"
-        # Línea 3: "Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since"
-        # Línea 4+: Datos reales
+        # Buscar sección CLIENT LIST
+        # Las primeras 3 líneas son encabezado
+        # Línea 4+ son datos
         
-        # Buscar líneas con datos (después del encabezado)
-        tail -n +4 "$STATUS_FILE" > /tmp/clientes_temp.txt 2>/dev/null
+        # Extraer datos después del encabezado
+        tail -n +4 "$STATUS_FILE" | head -20 > /tmp/clientes_datos.txt
         
-        if [ ! -s /tmp/clientes_temp.txt ]; then
+        if [ ! -s /tmp/clientes_datos.txt ]; then
             echo "ℹ️  No hay clientes conectados"
-            rm -f /tmp/clientes_temp.txt
-            
-            # Mostrar si hay alguna sección ROUTING_TABLE
-            if grep -q "ROUTING_TABLE" "$STATUS_FILE"; then
-                echo ""
-                echo "🔍 Buscando en ROUTING_TABLE..."
-                sed -n '/^ROUTING_TABLE/,/^GLOBAL_STATS/p' "$STATUS_FILE" | grep -v "^ROUTING_TABLE\|^GLOBAL_STATS" > /tmp/routing_temp.txt
-                
-                if [ -s /tmp/routing_temp.txt ]; then
-                    echo "✅ Clientes en enrutamiento:"
-                    echo ""
-                    cat /tmp/routing_temp.txt | while read linea; do
-                        cliente=$(echo "$linea" | cut -d',' -f1)
-                        ip=$(echo "$linea" | cut -d',' -f2)
-                        if [ -n "$cliente" ] && [ "$cliente" != "Common Name" ]; then
-                            nombre=$(obtener_nombre "$cliente")
-                            echo "👤 $nombre ($cliente)"
-                            echo "   📍 IP: $ip"
-                            echo ""
-                        fi
-                    done
-                fi
-                rm -f /tmp/routing_temp.txt
-            fi
-            
+            rm -f /tmp/clientes_datos.txt
             return
         fi
         
-        echo "👥 CLIENTES ENCONTRADOS:"
+        echo "👥 CLIENTES CONECTADOS:"
         echo ""
         
         clientes_encontrados=0
         
+        # Procesar cada línea (formato CSV)
         while IFS= read -r linea; do
-            # Formato CSV: Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since
-            # Ejemplo: client2,83.36.234.252:43295,2045818,47809865983,2025-12-03 10:41:58
+            # Ignorar líneas vacías
+            if [ -z "$linea" ]; then
+                continue
+            fi
             
-            # Separar por comas
-            IFS=, read -r cliente ip_puerto bytes_rx bytes_tx fecha_hora <<< "$linea"
+            # Separar por comas - método seguro
+            cliente=$(echo "$linea" | cut -d',' -f1)
+            ip_puerto=$(echo "$linea" | cut -d',' -f2)
+            bytes_rx=$(echo "$linea" | cut -d',' -f3)
+            bytes_tx=$(echo "$linea" | cut -d',' -f4)
+            fecha_hora=$(echo "$linea" | cut -d',' -f5)
             
-            if [ -n "$cliente" ] && [ "$cliente" != "Common Name" ]; then
+            # Verificar que sea un cliente real (no encabezado)
+            if [ -n "$cliente" ] && [ "$cliente" != "Common Name" ] && [ "$cliente" != "ROUTING_TABLE" ]; then
                 clientes_encontrados=$((clientes_encontrados + 1))
                 cliente_limpio=$(limpiar_nombre "$cliente")
                 nombre_descriptivo=$(obtener_nombre "$cliente")
                 
-                # Extraer IP (sin puerto si existe)
+                # Extraer IP (sin puerto)
                 ip_externa=$(echo "$ip_puerto" | cut -d: -f1)
                 puerto=$(echo "$ip_puerto" | cut -d: -f2)
                 
@@ -164,19 +155,28 @@ ver_conectados() {
                     echo "   🌐 IP: $ip_externa"
                 fi
                 
-                if [ -n "$bytes_rx" ] && echo "$bytes_rx" | grep -q '^[0-9]\+$'; then
+                # Mostrar tráfico si es numérico
+                if echo "$bytes_rx" | grep -q '^[0-9]\+$'; then
                     if [ "$bytes_rx" -gt 1048576 ]; then
-                        echo "   📥 Descargado: $(echo "$bytes_rx" | awk '{printf "%.2f MB", $1/1024/1024}')"
+                        mb_rx=$(echo "scale=2; $bytes_rx / 1024 / 1024" | bc 2>/dev/null || echo "$bytes_rx")
+                        echo "   📥 Descargado: ${mb_rx} MB"
+                    elif [ "$bytes_rx" -gt 1024 ]; then
+                        kb_rx=$(echo "scale=2; $bytes_rx / 1024" | bc 2>/dev/null || echo "$bytes_rx")
+                        echo "   📥 Descargado: ${kb_rx} KB"
                     else
-                        echo "   📥 Descargado: $(echo "$bytes_rx" | awk '{printf "%.2f KB", $1/1024}')"
+                        echo "   📥 Descargado: ${bytes_rx} B"
                     fi
                 fi
                 
-                if [ -n "$bytes_tx" ] && echo "$bytes_tx" | grep -q '^[0-9]\+$'; then
+                if echo "$bytes_tx" | grep -q '^[0-9]\+$'; then
                     if [ "$bytes_tx" -gt 1048576 ]; then
-                        echo "   📤 Enviado: $(echo "$bytes_tx" | awk '{printf "%.2f MB", $1/1024/1024}')"
+                        mb_tx=$(echo "scale=2; $bytes_tx / 1024 / 1024" | bc 2>/dev/null || echo "$bytes_tx")
+                        echo "   📤 Enviado: ${mb_tx} MB"
+                    elif [ "$bytes_tx" -gt 1024 ]; then
+                        kb_tx=$(echo "scale=2; $bytes_tx / 1024" | bc 2>/dev/null || echo "$bytes_tx")
+                        echo "   📤 Enviado: ${kb_tx} KB"
                     else
-                        echo "   📤 Enviado: $(echo "$bytes_tx" | awk '{printf "%.2f KB", $1/1024}')"
+                        echo "   📤 Enviado: ${bytes_tx} B"
                     fi
                 fi
                 
@@ -184,82 +184,31 @@ ver_conectados() {
                     echo "   🕒 Conectado: $fecha_hora"
                 fi
                 
+                echo ""
+                
                 # Registrar en historial
                 timestamp_actual=$(date '+%Y-%m-%d %H:%M:%S')
                 grep -v "^$cliente_limpio:$ip_externa:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
                 mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
                 echo "$cliente_limpio:$ip_externa:$timestamp_actual:$fecha_hora" >> "$IP_HISTORY_FILE"
-                
-                echo ""
             fi
-        done < /tmp/clientes_temp.txt
+        done < /tmp/clientes_datos.txt
         
-        rm -f /tmp/clientes_temp.txt
+        rm -f /tmp/clientes_datos.txt
         
         if [ $clientes_encontrados -eq 0 ]; then
             echo "ℹ️  No hay clientes conectados en este momento"
         else
-            echo "📊 RESUMEN: $clientes_encontrados cliente(s) conectado(s)"
-            escribir_log "Encontrados $clientes_encontrados clientes conectados"
+            echo "📊 TOTAL: $clientes_encontrados cliente(s) conectado(s)"
         fi
-        
-    elif echo "$primera_linea" | grep -q "^CLIENT_LIST"; then
-        echo "📋 Formato detectado: CLIENT_LIST con espacios"
-        echo ""
-        
-        # Tu código original para formato con espacios
-        grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "UNDEF" > /tmp/clientes_temp.txt 2>/dev/null
-        
-        if [ ! -s /tmp/clientes_temp.txt ]; then
-            echo "ℹ️  No hay clientes conectados"
-            rm -f /tmp/clientes_temp.txt
-            return
-        fi
-        
-        echo "👥 CLIENTES ENCONTRADOS:"
-        echo ""
-        
-        while read linea; do
-            cliente=$(echo "$linea" | awk '{print $2}')
-            ip_puerto=$(echo "$linea" | awk '{print $3}')
-            fecha=$(echo "$linea" | awk '{print $7}')
-            hora=$(echo "$linea" | awk '{print $8}')
-            
-            if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
-                cliente_limpio=$(limpiar_nombre "$cliente")
-                nombre_descriptivo=$(obtener_nombre "$cliente")
-                
-                echo "👤 $nombre_descriptivo"
-                echo "   🔑 Certificado: $cliente_limpio"
-                echo "   📍 IP: $ip_puerto"
-                if [ -n "$fecha" ] && [ -n "$hora" ]; then
-                    echo "   🕒 Conectado: $fecha $hora"
-                fi
-                echo ""
-            fi
-        done < /tmp/clientes_temp.txt
-        
-        rm -f /tmp/clientes_temp.txt
         
     else
         echo "⚠️  Formato de archivo no reconocido"
         echo ""
-        echo "📄 Primeras líneas:"
-        head -5 "$STATUS_FILE" | while read line; do
-            echo "   $line"
+        echo "📄 Primeras líneas del archivo:"
+        head -5 "$STATUS_FILE" | while read linea; do
+            echo "   $linea"
         done
-    fi
-    
-    # Mostrar información adicional
-    echo ""
-    echo "💡 INFORMACIÓN ADICIONAL:"
-    echo "   📁 Archivo usado: $STATUS_FILE"
-    echo "   📅 Última actualización: $(grep "^Updated," "$STATUS_FILE" 2>/dev/null | cut -d',' -f2 || echo "Desconocida")"
-    
-    # Verificar interfaz VPN
-    if ip link show tap0 >/dev/null 2>&1; then
-        echo "   🔗 Interfaz tap0: ACTIVA"
-        echo "   🏠 IP local VPN: $(ip addr show tap0 2>/dev/null | grep 'inet ' | awk '{print $2}' || echo "No configurada")"
     fi
 }
 
@@ -705,17 +654,11 @@ estado_servicio() {
     fi
     
     echo ""
-    echo "📁 ARCHIVOS DEL SISTEMA:"
+    echo "📁 ARCHIVOS:"
     
     if [ -f "/tmp/run/openvpn.VPN_Server.status" ]; then
         lineas=$(wc -l < "/tmp/run/openvpn.VPN_Server.status")
         echo "   ✅ /tmp/run/openvpn.VPN_Server.status ($lineas líneas)"
-        
-        # Mostrar última actualización
-        updated=$(grep "^Updated," "/tmp/run/openvpn.VPN_Server.status" | cut -d',' -f2)
-        if [ -n "$updated" ]; then
-            echo "   📅 Última actualización: $updated"
-        fi
     else
         echo "   ❌ Archivo de estado no encontrado"
     fi
@@ -809,48 +752,6 @@ EOF
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA CORREGIDO"
-echo ""
-echo "🔧 CAMBIOS REALIZADOS:"
-echo "   1. ✅ DETECTA FORMATO CSV:"
-echo "      - Ahora maneja 'OpenVPN CLIENT LIST' con comas"
-echo "      - Formato: Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since"
-echo ""
-echo "   2. ✅ USA EL ARCHIVO CORRECTO:"
-echo "      - Usa /tmp/run/openvpn.VPN_Server.status"
-echo "      - Este archivo SÍ tiene datos en formato CSV"
-echo ""
-echo "   3. ✅ PROCESA CORRECTAMENTE:"
-echo "      - Salta encabezados (líneas 1-3)"
-echo "      - Lee datos reales desde línea 4"
-echo "      - Muestra tráfico en KB/MB"
-echo "      - Registra en historial"
-echo ""
-echo "📋 EJEMPLO DE SALIDA ESPERADA:"
-echo ""
-echo "📊 CLIENTES CONECTADOS"
-echo "======================"
-echo ""
-echo "🕒 Fecha actual: 02/01/2026 00:10"
-echo ""
-echo "✅ Usando archivo: /tmp/run/openvpn.VPN_Server.status"
-echo "📏 Tamaño: 8 líneas"
-echo ""
-echo "📋 Formato detectado: OpenVPN CSV con comas"
-echo ""
-echo "👥 CLIENTES ENCONTRADOS:"
-echo ""
-echo "👤 Cris"
-echo "   🔑 Certificado: client2"
-echo "   🌐 IP: 83.36.234.252:43295"
-echo "   📥 Descargado: 1.95 MB"
-echo "   📤 Enviado: 45598.76 MB"
-echo "   🕒 Conectado: 2025-12-03 10:41:58"
-echo ""
-echo "📊 RESUMEN: 1 cliente(s) conectado(s)"
-echo ""
-echo "💡 INFORMACIÓN ADICIONAL:"
-echo "   📁 Archivo usado: /tmp/run/openvpn.VPN_Server.status"
-echo "   📅 Última actualización: 2026-01-02 00:09:48"
+echo "✅ SISTEMA INSTALADO"
 echo ""
 echo "🚀 Ejecuta: gestion"
