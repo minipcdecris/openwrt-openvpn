@@ -1,8 +1,8 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 INSTALANDO VERSIÓN SIMPLIFICADA"
-echo "=================================="
+echo "🔧 INSTALANDO VERSIÓN CON FILTRO MEJORADO"
+echo "========================================="
 
 cat > /usr/bin/gestion << 'EOF'
 #!/bin/sh
@@ -15,16 +15,12 @@ mostrar_menu() {
     echo "=============="
     echo ""
     echo "1) 👁️  Ver clientes conectados"
-    echo "2) 📋 Listar estado de clientes"
-    echo "3) 🚫 BLOQUEAR cliente"
-    echo "4) ✅ DESBLOQUEAR cliente"
-    echo "5) 🏷️  Gestionar nombres"
-    echo "6) ❌ Salir"
+    echo "2) ❌ Salir"
     echo ""
-    echo -n "Selecciona [1-6]: "
+    echo -n "Selecciona [1-2]: "
 }
 
-# FUNCIÓN VER_CONECTADOS SIMPLIFICADA
+# FUNCIÓN VER_CONECTADOS CON FILTRO MEJORADO
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS:"
@@ -41,35 +37,30 @@ ver_conectados() {
     # Verificar formato CSV
     if head -1 "$STATUS_FILE" | grep -q "OpenVPN CLIENT LIST"; then
         # Formato CSV con comas
-        # Saltar primeras 3 líneas (encabezados)
-        # Línea 4+ son datos: client2,88.0.78.97:37861,42844,537034213,2026-01-02 00:10:47
+        # Solo procesar líneas que tengan el formato correcto:
+        # client2,88.0.78.97:37861,42844,537034213,2026-01-02 00:10:47
         
-        # Buscar líneas con datos reales
-        tail -n +4 "$STATUS_FILE" | head -20 > /tmp/clientes_temp.txt
+        # Buscar en la sección CLIENT LIST (antes de ROUTING_TABLE)
+        encontrados=0
         
-        if [ ! -s /tmp/clientes_temp.txt ]; then
-            echo "ℹ️  No hay clientes conectados"
-            rm -f /tmp/clientes_temp.txt
-            return
-        fi
-        
-        # Procesar cada cliente
+        # Leer línea por línea
         while IFS= read -r linea; do
-            # Ignorar líneas vacías
-            if [ -z "$linea" ]; then
+            # Filtrar líneas que NO queremos mostrar
+            if echo "$linea" | grep -q -i "ROUTING_TABLE\|GLOBAL_STATS\|END\|Virtual Address\|Common Name\|Max bcast"; then
                 continue
             fi
             
-            # Separar por comas
-            cliente=$(echo "$linea" | cut -d',' -f1)
-            ip_puerto=$(echo "$linea" | cut -d',' -f2)
-            bytes_rx=$(echo "$linea" | cut -d',' -f3)
-            bytes_tx=$(echo "$linea" | cut -d',' -f4)
-            fecha_hora=$(echo "$linea" | cut -d',' -f5)
-            
-            # Verificar que sea un cliente real
-            if [ -n "$cliente" ] && [ "$cliente" != "Common Name" ]; then
-                # Mostrar información EXACTAMENTE como la necesitas
+            # Filtrar líneas que SÍ queremos (formato cliente,ip,bytes,bytes,fecha)
+            if echo "$linea" | grep -q "^[a-zA-Z0-9_]\+,[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+:[0-9]\+,.*,.*,20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]$"; then
+                
+                # Separar por comas
+                cliente=$(echo "$linea" | cut -d',' -f1)
+                ip_puerto=$(echo "$linea" | cut -d',' -f2)
+                bytes_rx=$(echo "$linea" | cut -d',' -f3)
+                bytes_tx=$(echo "$linea" | cut -d',' -f4)
+                fecha_hora=$(echo "$linea" | cut -d',' -f5)
+                
+                # Mostrar información
                 echo "👤 $cliente"
                 echo "   🔑 Certificado: $cliente"
                 echo "   🌐 IP: $ip_puerto"
@@ -104,45 +95,17 @@ ver_conectados() {
                 fi
                 
                 echo ""
+                encontrados=1
             fi
-        done < /tmp/clientes_temp.txt
+        done < "$STATUS_FILE"
         
-        rm -f /tmp/clientes_temp.txt
+        if [ $encontrados -eq 0 ]; then
+            echo "ℹ️  No hay clientes conectados"
+        fi
+        
     else
         echo "⚠️  Formato de archivo no compatible"
     fi
-}
-
-# Función para listar estado de clientes (simplificada)
-listar_clientes() {
-    echo ""
-    echo "📋 CLIENTES REGISTRADOS:"
-    echo ""
-    echo "ℹ️  Función no implementada en versión simplificada"
-}
-
-# Función para bloquear cliente (simplificada)
-bloquear_cliente() {
-    echo ""
-    echo "🚫 BLOQUEAR CLIENTE"
-    echo ""
-    echo "ℹ️  Función no implementada en versión simplificada"
-}
-
-# Función para desbloquear cliente (simplificada)
-desbloquear_cliente() {
-    echo ""
-    echo "✅ DESBLOQUEAR CLIENTE"
-    echo ""
-    echo "ℹ️  Función no implementada en versión simplificada"
-}
-
-# Función para gestionar nombres (simplificada)
-gestionar_nombres() {
-    echo ""
-    echo "🏷️  GESTIONAR NOMBRES"
-    echo ""
-    echo "ℹ️  Función no implementada en versión simplificada"
 }
 
 # Programa principal
@@ -155,18 +118,6 @@ while true; do
             ver_conectados
             ;;
         2)
-            listar_clientes
-            ;;
-        3)
-            bloquear_cliente
-            ;;
-        4)
-            desbloquear_cliente
-            ;;
-        5)
-            gestionar_nombres
-            ;;
-        6)
             echo ""
             echo "👋 Saliendo..."
             exit 0
@@ -187,15 +138,15 @@ chmod +x /usr/bin/gestion
 echo ""
 echo "✅ SISTEMA INSTALADO"
 echo ""
-echo "📋 FORMATO DE SALIDA:"
+echo "🔧 FILTROS APLICADOS:"
+echo "   ❌ ROUTING_TABLE"
+echo "   ❌ GLOBAL_STATS"
+echo "   ❌ END"
+echo "   ❌ Virtual Address"
+echo "   ❌ Common Name"
+echo "   ❌ Max bcast"
 echo ""
-echo "📊 CLIENTES CONECTADOS:"
-echo ""
-echo "👤 client2"
-echo "   🔑 Certificado: client2"
-echo "   🌐 IP: 88.0.78.97:37861"
-echo "   📥 Descargado: 42844 KB"
-echo "   📤 Enviado: 537034213 MB"
-echo "   🕒 Conectado: 2026-01-02 00:10:47"
+echo "✅ Solo mostrará clientes reales con formato:"
+echo "   cliente,ip:puerto,bytes_rx,bytes_tx,fecha"
 echo ""
 echo "🚀 Ejecuta: gestion"
