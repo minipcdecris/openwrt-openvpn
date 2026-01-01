@@ -1,13 +1,9 @@
 #!/bin/sh
 
 echo ""
-echo "🔧 INSTALANDO SISTEMA DE GESTIÓN VPN CORREGIDO"
-echo "=============================================="
+echo "🔧 ACTUALIZANDO CON DETECCIÓN ALTERNATIVA"
+echo "========================================="
 
-# Crear directorio para archivos de configuración
-mkdir -p /etc/openvpn/clientes
-
-# Crear script principal corregido
 cat > /usr/bin/gestion << 'EOF'
 #!/bin/sh
 
@@ -18,6 +14,7 @@ SUSPENDED_FILE="/etc/openvpn/clientes/suspended.txt"
 LOG_FILE="/etc/openvpn/clientes/vpn_gestion.log"
 
 # Crear archivos si no existen
+mkdir -p /etc/openvpn/clientes
 touch "$NOMBRES_FILE" "$IP_HISTORY_FILE" "$SUSPENDED_FILE" "$LOG_FILE"
 
 # Función para escribir en log
@@ -50,8 +47,8 @@ obtener_nombre() {
 mostrar_menu() {
     clear
     echo ""
-    echo "🔧 GESTIÓN VPN - SISTEMA COMPLETO"
-    echo "=================================="
+    echo "🔧 GESTIÓN VPN"
+    echo "=============="
     echo ""
     echo "1) 👁️  Ver clientes conectados"
     echo "2) 📋 Listar estado de clientes"
@@ -66,7 +63,7 @@ mostrar_menu() {
     echo -n "Selecciona [1-9]: "
 }
 
-# FUNCIÓN VER_CONECTADOS SIMPLIFICADA Y FUNCIONAL
+# FUNCIÓN MEJORADA - BUSCA CLIENTES DE MÚLTIPLES MANERAS
 ver_conectados() {
     echo ""
     echo "📊 CLIENTES CONECTADOS"
@@ -75,122 +72,157 @@ ver_conectados() {
     
     escribir_log "Buscando clientes conectados"
     
-    # Buscar archivo de estado en ubicaciones comunes
-    STATUS_FILE=""
-    
-    # Lista de ubicaciones posibles (priorizando las tuyas)
-    if [ -f "/etc/openvpn/openvpn-status.log" ]; then
-        STATUS_FILE="/etc/openvpn/openvpn-status.log"
-    elif [ -f "/tmp/run/openvpn.VPN_Server.status" ]; then
-        STATUS_FILE="/tmp/run/openvpn.VPN_Server.status"
-    elif [ -f "/var/log/openvpn-status.log" ]; then
-        STATUS_FILE="/var/log/openvpn-status.log"
-    elif [ -f "/tmp/openvpn-status.log" ]; then
-        STATUS_FILE="/tmp/openvpn-status.log"
-    else
-        echo "❌ No se encuentra archivo de estado"
-        echo ""
-        echo "💡 Archivos encontrados en tu sistema:"
-        echo "   /etc/openvpn/openvpn-status.log"
-        echo "   /tmp/run/openvpn.VPN_Server.status"
-        echo ""
-        echo "⚠️  Verifica que OpenVPN esté configurado con:"
-        echo "   status /etc/openvpn/openvpn-status.log"
-        escribir_log "No se encuentra archivo de estado"
-        return
-    fi
-    
-    echo "✅ Usando archivo: $STATUS_FILE"
-    
-    # Verificar si el archivo tiene contenido
-    if [ ! -s "$STATUS_FILE" ]; then
-        echo "ℹ️  El archivo de estado está vacío"
-        echo "   No hay clientes conectados o OpenVPN no ha generado datos"
-        escribir_log "Archivo de estado vacío"
-        return
-    fi
-    
-    # Obtener fecha actual
     fecha_hora_actual=$(date '+%d/%m/%Y %H:%M')
     echo "🕒 Fecha actual: $fecha_hora_actual"
     echo ""
     
-    # Buscar clientes en CLIENT_LIST (formato con espacios)
-    if grep -q "^CLIENT_LIST" "$STATUS_FILE"; then
-        echo "🔍 Buscando clientes conectados..."
-        
-        # Filtrar líneas con datos reales
-        grep "^CLIENT_LIST" "$STATUS_FILE" | grep -v "UNDEF" > /tmp/clientes_temp.txt 2>/dev/null
-        
-        if [ ! -s /tmp/clientes_temp.txt ]; then
-            echo "ℹ️  No hay clientes conectados"
-            rm -f /tmp/clientes_temp.txt
-            return
-        fi
-        
-        # Procesar cada cliente
-        while read linea; do
-            # Formato: CLIENT_LIST client2 83.36.234.252:43295 10.8.0.2 2045818 47809865983 2025-12-03 10:41:58 1764754918 UNDEF 0 AES-256-GCM
-            cliente=$(echo "$linea" | awk '{print $2}')
-            ip_puerto=$(echo "$linea" | awk '{print $3}')
-            ip_interna=$(echo "$linea" | awk '{print $4}')
-            fecha_conexion=$(echo "$linea" | awk '{print $7}')
-            hora_conexion=$(echo "$linea" | awk '{print $8}')
+    # MÉTODO 1: Buscar en TODOS los archivos de estado posibles
+    echo "🔍 Buscando archivos de estado OpenVPN..."
+    echo ""
+    
+    encontrado=0
+    
+    # Lista de archivos a verificar
+    archivos_posibles="
+        /etc/openvpn/openvpn-status.log
+        /tmp/run/openvpn.VPN_Server.status
+        /var/log/openvpn-status.log
+        /tmp/openvpn-status.log
+        /etc/openvpn/status.log
+        /var/log/openvpn/status
+        /run/openvpn/status
+        /var/log/openvpn.log
+    "
+    
+    for archivo in $archivos_posibles; do
+        if [ -f "$archivo" ] && [ -s "$archivo" ]; then
+            echo "✅ Encontrado: $archivo"
+            echo "📏 Tamaño: $(wc -l < "$archivo") líneas"
+            echo ""
             
-            if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
-                cliente_limpio=$(limpiar_nombre "$cliente")
-                nombre_descriptivo=$(obtener_nombre "$cliente")
-                
-                # Extraer IP (sin puerto)
-                ip_externa=$(echo "$ip_puerto" | cut -d: -f1)
-                puerto=$(echo "$ip_puerto" | cut -d: -f2)
-                
-                # Registrar en historial
-                timestamp_actual=$(date '+%Y-%m-%d %H:%M:%S')
-                
-                # Eliminar entrada antigua si existe
-                grep -v "^$cliente_limpio:$ip_externa:" "$IP_HISTORY_FILE" > /tmp/ip_temp.txt 2>/dev/null
-                mv /tmp/ip_temp.txt "$IP_HISTORY_FILE" 2>/dev/null
-                
-                # Añadir nueva entrada
-                echo "$cliente_limpio:$ip_externa:$timestamp_actual:$fecha_conexion $hora_conexion" >> "$IP_HISTORY_FILE"
-                
-                # Mostrar información
-                echo "👤 $nombre_descriptivo"
-                echo "   🔑 Certificado: $cliente_limpio"
-                
-                if [ -n "$puerto" ]; then
-                    echo "   🌐 IP: $ip_externa:$puerto"
-                else
-                    echo "   🌐 IP: $ip_externa"
-                fi
-                
-                if [ -n "$ip_interna" ] && [ "$ip_interna" != "UNDEF" ]; then
-                    echo "   🏠 VPN: $ip_interna"
-                fi
-                
-                if [ -n "$fecha_conexion" ] && [ -n "$hora_conexion" ]; then
-                    echo "   🕒 Conectado: $fecha_conexion $hora_conexion"
-                fi
-                
+            # Mostrar primeras líneas para diagnóstico
+            echo "📄 Contenido (primeras 3 líneas):"
+            head -3 "$archivo" | while read linea; do
+                echo "   $linea"
+            done
+            echo ""
+            
+            # Buscar CLIENT_LIST en este archivo
+            if grep -q "^CLIENT_LIST" "$archivo"; then
+                echo "🎯 Formato CLIENT_LIST detectado"
                 echo ""
+                
+                grep "^CLIENT_LIST" "$archivo" | grep -v "UNDEF" > /tmp/clientes_temp.txt 2>/dev/null
+                
+                if [ -s /tmp/clientes_temp.txt ]; then
+                    echo "👥 CLIENTES ENCONTRADOS:"
+                    echo ""
+                    
+                    while read linea; do
+                        cliente=$(echo "$linea" | awk '{print $2}')
+                        ip_puerto=$(echo "$linea" | awk '{print $3}')
+                        fecha=$(echo "$linea" | awk '{print $7}')
+                        hora=$(echo "$linea" | awk '{print $8}')
+                        
+                        if [ -n "$cliente" ] && [ "$cliente" != "UNDEF" ]; then
+                            cliente_limpio=$(limpiar_nombre "$cliente")
+                            nombre_descriptivo=$(obtener_nombre "$cliente")
+                            
+                            echo "👤 $nombre_descriptivo ($cliente_limpio)"
+                            echo "   📍 IP: $ip_puerto"
+                            if [ -n "$fecha" ] && [ -n "$hora" ]; then
+                                echo "   🕒 Conectado: $fecha $hora"
+                            fi
+                            echo ""
+                            
+                            encontrado=1
+                        fi
+                    done < /tmp/clientes_temp.txt
+                    
+                    rm -f /tmp/clientes_temp.txt
+                else
+                    echo "ℹ️  No hay clientes en CLIENT_LIST"
+                fi
+            else
+                echo "ℹ️  No tiene formato CLIENT_LIST"
             fi
-        done < /tmp/clientes_temp.txt
-        
-        rm -f /tmp/clientes_temp.txt
-        escribir_log "Clientes mostrados correctamente"
-        
-    else
-        echo "⚠️  Formato de archivo no reconocido"
+            
+            echo "---"
+            echo ""
+        fi
+    done
+    
+    # MÉTODO 2: Buscar conexiones de red activas
+    if [ $encontrado -eq 0 ]; then
+        echo "🔍 Buscando conexiones activas de OpenVPN..."
         echo ""
-        echo "📄 Primeras líneas del archivo:"
-        head -3 "$STATUS_FILE" | while read line; do
-            echo "   $line"
-        done
+        
+        # Verificar si hay interfaz tun/tap activa
+        if ip link show tun0 >/dev/null 2>&1; then
+            echo "✅ Interfaz tun0 activa"
+            echo "📡 Direcciones en tun0:"
+            ip addr show tun0 | grep inet
+            echo ""
+            
+            # Mostrar conexiones establecidas
+            if command -v ss >/dev/null; then
+                echo "🔗 Conexiones OpenVPN activas:"
+                ss -tunp | grep -E "(openvpn|:1194)" | head -10
+            fi
+            encontrado=1
+        elif ip link show tap0 >/dev/null 2>&1; then
+            echo "✅ Interfaz tap0 activa"
+            ip addr show tap0 | grep inet
+            encontrado=1
+        fi
     fi
+    
+    # MÉTODO 3: Verificar procesos OpenVPN
+    if [ $encontrado -eq 0 ]; then
+        echo "🔍 Verificando procesos OpenVPN..."
+        echo ""
+        
+        if pgrep openvpn >/dev/null; then
+            echo "✅ OpenVPN está ejecutándose"
+            echo "📝 Procesos encontrados:"
+            ps aux | grep openvpn | grep -v grep
+            echo ""
+            echo "💡 OpenVPN está activo pero no hay archivo de estado"
+            echo "   Posibles soluciones:"
+            echo "   1. Configurar 'status' en server.conf"
+            echo "   2. Esperar a que un cliente se conecte"
+            echo "   3. Reiniciar OpenVPN"
+        else
+            echo "❌ OpenVPN NO está ejecutándose"
+            echo "   No puede haber clientes conectados"
+        fi
+    fi
+    
+    # MÉTODO 4: Mostrar historial si no hay conexiones actuales
+    if [ $encontrado -eq 0 ]; then
+        echo ""
+        echo "📋 ÚLTIMAS CONEXIONES REGISTRADAS:"
+        echo ""
+        
+        if [ -f "$IP_HISTORY_FILE" ] && [ -s "$IP_HISTORY_FILE" ]; then
+            echo "Últimas 10 conexiones:"
+            echo ""
+            tail -10 "$IP_HISTORY_FILE" | while read linea; do
+                cliente=$(echo "$linea" | cut -d: -f1)
+                ip=$(echo "$linea" | cut -d: -f2)
+                fecha=$(echo "$linea" | cut -d: -f4)
+                nombre=$(obtener_nombre "$cliente")
+                echo "📅 $fecha - 👤 $nombre - 📍 $ip"
+            done
+        else
+            echo "📭 No hay conexiones registradas"
+        fi
+    fi
+    
+    escribir_log "Búsqueda de clientes completada"
 }
 
-# Función para listar estado de clientes (simplificada)
+# Función para listar estado de clientes
 listar_clientes() {
     echo ""
     echo "📋 ESTADO DE CLIENTES"
@@ -254,7 +286,7 @@ listar_clientes() {
     fi
 }
 
-# Función para bloquear cliente (simplificada)
+# Función para bloquear cliente
 bloquear_cliente() {
     echo ""
     echo "🚫 BLOQUEAR CLIENTE"
@@ -386,7 +418,7 @@ bloquear_cliente() {
     fi
 }
 
-# Función para desbloquear cliente (simplificada)
+# Función para desbloquear cliente
 desbloquear_cliente() {
     echo ""
     echo "✅ DESBLOQUEAR CLIENTE"
@@ -566,7 +598,7 @@ gestionar_nombres() {
                     echo "❌ Selección inválida"
                     continue
                 fi
-                
+    
                 echo ""
                 echo -n "¿Eliminar nombre de '$cliente_eliminar'? (s/N): "
                 read confirmar
@@ -661,6 +693,21 @@ estado_servicio() {
         echo "   ❌ No instalado"
     fi
     
+    # Archivos
+    echo ""
+    echo "📁 ARCHIVOS DEL SISTEMA:"
+    
+    if [ -f "/etc/openvpn/openvpn-status.log" ]; then
+        tamano=$(wc -c < "/etc/openvpn/openvpn-status.log")
+        if [ $tamano -eq 0 ]; then
+            echo "   ⚠️  /etc/openvpn/openvpn-status.log (VACÍO)"
+        else
+            echo "   ✅ /etc/openvpn/openvpn-status.log ($(wc -l < "/etc/openvpn/openvpn-status.log") líneas)"
+        fi
+    else
+        echo "   ❌ /etc/openvpn/openvpn-status.log (NO EXISTE)"
+    fi
+    
     # Estadísticas
     echo ""
     echo "📊 ESTADÍSTICAS:"
@@ -673,16 +720,6 @@ estado_servicio() {
     
     bloqueados=$(wc -l < "$SUSPENDED_FILE" 2>/dev/null || echo 0)
     echo "   🚫 Clientes bloqueados: $bloqueados"
-    
-    # Archivo de estado
-    echo ""
-    echo "📄 ARCHIVO DE ESTADO VPN:"
-    if [ -f "/etc/openvpn/openvpn-status.log" ]; then
-        lineas=$(wc -l < "/etc/openvpn/openvpn-status.log")
-        echo "   ✅ /etc/openvpn/openvpn-status.log ($lineas líneas)"
-    else
-        echo "   ❌ No encontrado"
-    fi
 }
 
 # Función para ver LOG del sistema
@@ -758,20 +795,15 @@ while true; do
 done
 EOF
 
-# Dar permisos
 chmod +x /usr/bin/gestion
 
 echo ""
-echo "✅ SISTEMA INSTALADO CORRECTAMENTE"
+echo "✅ SISTEMA ACTUALIZADO"
 echo ""
-echo "🔧 CARACTERÍSTICAS:"
-echo "   1. ✅ Ver clientes conectados"
-echo "   2. ✅ Listar estado de clientes"
-echo "   3. ✅ Bloquear clientes"
-echo "   4. ✅ Desbloquear clientes"
-echo "   5. ✅ Gestionar nombres"
-echo "   6. ✅ Estado del sistema"
-echo "   7. ✅ Registrar IPs manualmente"
-echo "   8. ✅ Ver logs"
+echo "🔧 AHORA BUSCA DE MÚLTIPLES MANERAS:"
+echo "   1. Busca en TODOS los archivos de estado"
+echo "   2. Verifica conexiones de red activas"
+echo "   3. Comprueba procesos OpenVPN"
+echo "   4. Muestra historial si no hay conexiones actuales"
 echo ""
 echo "🚀 Ejecuta: gestion"
