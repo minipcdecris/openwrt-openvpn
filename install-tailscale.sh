@@ -2,11 +2,15 @@
 
 # ============================================================
 # Tailscale Installer - Cudy / OpenWrt
-# Versión DEFINITIVA 1.1
+# Versión DEFINITIVA 1.2
 #
-# IMPORTANTE:
+# Compatible con Cudy / OpenWrt
+#
+# CONFIGURACIÓN CRÍTICA:
 # Tailscale utiliza NetfilterMode=off para evitar conflictos
-# con nftables/firewall de OpenWrt en los Cudy.
+# con nftables/firewall de OpenWrt.
+#
+# Esta configuración ha sido comprobada en Cudy reales.
 # ============================================================
 
 set -u
@@ -31,7 +35,7 @@ error() {
 echo ""
 echo "============================================================"
 echo "        INSTALADOR TAILSCALE - CUDY / OPENWRT"
-echo "                    VERSION DEFINITIVA 1.1"
+echo "                    VERSION DEFINITIVA 1.2"
 echo "============================================================"
 echo ""
 
@@ -77,7 +81,9 @@ ok "Espacio disponible en /overlay: ${AVAILABLE:-desconocido} KB"
 # 4. Comprobar conectividad
 # ------------------------------------------------------------
 
-if ! wget -q -O /dev/null --timeout=10 https://controlplane.tailscale.com 2>/dev/null; then
+if ! wget -q -O /dev/null --timeout=10 \
+    https://controlplane.tailscale.com 2>/dev/null; then
+
     error "No hay conectividad con Tailscale."
     exit 1
 fi
@@ -164,9 +170,13 @@ fi
 /etc/init.d/tailscale enable
 
 if ! /etc/init.d/tailscale status >/dev/null 2>&1; then
+
     echo "Iniciando servicio tailscale..."
+
     /etc/init.d/tailscale start
+
     sleep 3
+
 fi
 
 if /etc/init.d/tailscale status >/dev/null 2>&1; then
@@ -207,7 +217,9 @@ if echo "$TS_STATE" | grep -q "Logged out"; then
         --accept-dns=false; then
 
         error "No se pudo registrar el Cudy en Tailscale."
+
         unset AUTHKEY
+
         exit 1
     fi
 
@@ -220,10 +232,15 @@ else
     ok "Tailscale está autenticado y funcionando."
     ok "No se modifica la autenticación existente."
 
-    if tailscale set --hostname="$TS_HOSTNAME" >/dev/null 2>&1; then
+    if tailscale set \
+        --hostname="$TS_HOSTNAME" >/dev/null 2>&1; then
+
         ok "Hostname Tailscale actualizado."
+
     else
+
         warn "No se pudo actualizar el hostname de Tailscale."
+
     fi
 
 fi
@@ -231,46 +248,47 @@ fi
 # ------------------------------------------------------------
 # 10. CONFIGURACIÓN CRÍTICA PARA OPENWRT / CUDY
 # ------------------------------------------------------------
-#
-# Tailscale puede detectar nftables y activar automáticamente
-# NetfilterMode=2 (nft-forced).
-#
-# En nuestros Cudy esto provoca que las cadenas:
-#
-#   ts-input
-#   ts-forward
-#   ts-postrouting
-#
-# interfieran con el tráfico real de Tailscale.
-#
-# La solución comprobada en cliente4 es:
-#
-#   NetfilterMode=0
-#
-# Es decir, Tailscale NO modifica el firewall mediante nftables.
-#
-# OpenWrt mantiene el control de su propio firewall.
-# ------------------------------------------------------------
 
 echo ""
 echo "Configurando Tailscale para OpenWrt / Cudy..."
 echo ""
 
+#
+# Tailscale puede detectar nftables y activar automáticamente
+# NetfilterMode=2 (nft-forced).
+#
+# En nuestros Cudy esto puede provocar conflictos con el
+# firewall de OpenWrt y bloquear tráfico Tailscale.
+#
+# La configuración comprobada es:
+#
+#     NetfilterMode=0
+#
+# Tailscale deja de modificar nftables y OpenWrt mantiene
+# el control de su propio firewall.
+#
+
 if tailscale set --netfilter-mode=off >/dev/null 2>&1; then
+
     ok "Netfilter de Tailscale desactivado."
+
 else
+
     error "No se pudo desactivar Netfilter de Tailscale."
     exit 1
+
 fi
 
 # ------------------------------------------------------------
 # 11. Verificar NetfilterMode
 # ------------------------------------------------------------
 
-NETFILTER_MODE=$(tailscale debug prefs 2>/dev/null | \
-    grep '"NetfilterMode"' | \
-    sed 's/.*"NetfilterMode": *\([0-9]*\).*/\1/' | \
-    head -n 1)
+NETFILTER_MODE=$(
+    tailscale debug prefs 2>/dev/null |
+    grep '"NetfilterMode"' |
+    sed 's/.*"NetfilterMode": *\([0-9]*\).*/\1/' |
+    head -n 1
+)
 
 if [ "$NETFILTER_MODE" = "0" ]; then
 
@@ -280,32 +298,39 @@ else
 
     error "NetfilterMode no ha quedado correctamente configurado."
     error "Valor detectado: ${NETFILTER_MODE:-desconocido}"
+
     exit 1
 
 fi
 
 # ------------------------------------------------------------
-# 12. Comprobar que Tailscale sigue funcionando
+# 12. Comprobar servicio
 # ------------------------------------------------------------
 
 sleep 2
 
-if ! /etc/init.d/tailscale status >/dev/null 2>&1; then
+if /etc/init.d/tailscale status >/dev/null 2>&1; then
+
+    ok "Servicio Tailscale funcionando correctamente."
+
+else
+
     error "Tailscale dejó de funcionar después de configurar Netfilter."
     exit 1
+
 fi
 
-ok "Servicio Tailscale funcionando correctamente."
-
 # ------------------------------------------------------------
-# 13. Comprobar IP Tailscale
+# 13. Obtener IP Tailscale
 # ------------------------------------------------------------
 
 TS_IP=$(tailscale ip -4 2>/dev/null | head -n 1)
 
 if [ -z "$TS_IP" ]; then
+
     error "Tailscale no ha obtenido una dirección IPv4."
     exit 1
+
 fi
 
 ok "IP Tailscale: $TS_IP"
@@ -317,10 +342,14 @@ ok "IP Tailscale: $TS_IP"
 FINAL_STATE=$(tailscale status 2>&1)
 
 if echo "$FINAL_STATE" | grep -q "$TS_IP"; then
+
     ok "Estado final Tailscale: RUNNING"
+
 else
+
     error "No se ha podido confirmar el estado final de Tailscale."
     exit 1
+
 fi
 
 # ------------------------------------------------------------
@@ -338,13 +367,13 @@ echo "============================================================"
 echo "              TAILSCALE CONFIGURADO CORRECTAMENTE"
 echo "============================================================"
 echo ""
-echo "Hostname OpenWrt   : $HOSTNAME"
-echo "Hostname Tailscale : $TS_HOSTNAME"
-echo "IP Tailscale       : $TS_IP"
-echo "Servicio           : RUNNING"
-echo "Autenticación      : OK"
-echo "DNS Tailscale      : DESACTIVADO"
-echo "Netfilter Tailscale: OFF"
+echo "Hostname OpenWrt    : $HOSTNAME"
+echo "Hostname Tailscale  : $TS_HOSTNAME"
+echo "IP Tailscale        : $TS_IP"
+echo "Servicio            : RUNNING"
+echo "Autenticación       : OK"
+echo "DNS Tailscale       : DESACTIVADO"
+echo "Netfilter Tailscale : OFF"
 echo ""
 echo "============================================================"
 echo ""
