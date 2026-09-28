@@ -2,7 +2,11 @@
 
 # ============================================================
 # Tailscale Installer - Cudy / OpenWrt
-# Versión DEFINITIVA 1.0
+# Versión DEFINITIVA 1.1
+#
+# IMPORTANTE:
+# Tailscale utiliza NetfilterMode=off para evitar conflictos
+# con nftables/firewall de OpenWrt en los Cudy.
 # ============================================================
 
 set -u
@@ -27,7 +31,7 @@ error() {
 echo ""
 echo "============================================================"
 echo "        INSTALADOR TAILSCALE - CUDY / OPENWRT"
-echo "                    VERSION DEFINITIVA"
+echo "                    VERSION DEFINITIVA 1.1"
 echo "============================================================"
 echo ""
 
@@ -225,10 +229,77 @@ else
 fi
 
 # ------------------------------------------------------------
-# 10. Comprobar IP Tailscale
+# 10. CONFIGURACIÓN CRÍTICA PARA OPENWRT / CUDY
+# ------------------------------------------------------------
+#
+# Tailscale puede detectar nftables y activar automáticamente
+# NetfilterMode=2 (nft-forced).
+#
+# En nuestros Cudy esto provoca que las cadenas:
+#
+#   ts-input
+#   ts-forward
+#   ts-postrouting
+#
+# interfieran con el tráfico real de Tailscale.
+#
+# La solución comprobada en cliente4 es:
+#
+#   NetfilterMode=0
+#
+# Es decir, Tailscale NO modifica el firewall mediante nftables.
+#
+# OpenWrt mantiene el control de su propio firewall.
+# ------------------------------------------------------------
+
+echo ""
+echo "Configurando Tailscale para OpenWrt / Cudy..."
+echo ""
+
+if tailscale set --netfilter-mode=off >/dev/null 2>&1; then
+    ok "Netfilter de Tailscale desactivado."
+else
+    error "No se pudo desactivar Netfilter de Tailscale."
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# 11. Verificar NetfilterMode
+# ------------------------------------------------------------
+
+NETFILTER_MODE=$(tailscale debug prefs 2>/dev/null | \
+    grep '"NetfilterMode"' | \
+    sed 's/.*"NetfilterMode": *\([0-9]*\).*/\1/' | \
+    head -n 1)
+
+if [ "$NETFILTER_MODE" = "0" ]; then
+
+    ok "NetfilterMode: 0 (OFF)"
+
+else
+
+    error "NetfilterMode no ha quedado correctamente configurado."
+    error "Valor detectado: ${NETFILTER_MODE:-desconocido}"
+    exit 1
+
+fi
+
+# ------------------------------------------------------------
+# 12. Comprobar que Tailscale sigue funcionando
 # ------------------------------------------------------------
 
 sleep 2
+
+if ! /etc/init.d/tailscale status >/dev/null 2>&1; then
+    error "Tailscale dejó de funcionar después de configurar Netfilter."
+    exit 1
+fi
+
+ok "Servicio Tailscale funcionando correctamente."
+
+# ------------------------------------------------------------
+# 13. Comprobar IP Tailscale
+# ------------------------------------------------------------
 
 TS_IP=$(tailscale ip -4 2>/dev/null | head -n 1)
 
@@ -240,7 +311,7 @@ fi
 ok "IP Tailscale: $TS_IP"
 
 # ------------------------------------------------------------
-# 11. Comprobar estado final
+# 14. Comprobar estado final
 # ------------------------------------------------------------
 
 FINAL_STATE=$(tailscale status 2>&1)
@@ -253,13 +324,13 @@ else
 fi
 
 # ------------------------------------------------------------
-# 12. Asegurar permisos
+# 15. Asegurar permisos
 # ------------------------------------------------------------
 
 chmod +x /root/install-tailscale.sh 2>/dev/null || true
 
 # ------------------------------------------------------------
-# 13. Resumen final
+# 16. Resumen final
 # ------------------------------------------------------------
 
 echo ""
@@ -273,9 +344,9 @@ echo "IP Tailscale       : $TS_IP"
 echo "Servicio           : RUNNING"
 echo "Autenticación      : OK"
 echo "DNS Tailscale      : DESACTIVADO"
+echo "Netfilter Tailscale: OFF"
 echo ""
 echo "============================================================"
 echo ""
 
 exit 0
-
