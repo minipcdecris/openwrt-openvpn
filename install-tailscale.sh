@@ -4,13 +4,22 @@
 # Tailscale Installer - Cudy / OpenWrt
 # Versión DEFINITIVA 1.2
 #
-# Compatible con Cudy / OpenWrt
+# SOLUCIONES INCORPORADAS:
 #
-# CONFIGURACIÓN CRÍTICA:
-# Tailscale utiliza NetfilterMode=off para evitar conflictos
-# con nftables/firewall de OpenWrt.
+# 1. Tailscale NetfilterMode=0
+#    Evita conflictos entre Tailscale y nftables de OpenWrt.
 #
-# Esta configuración ha sido comprobada en Cudy reales.
+# 2. Firewall OpenWrt:
+#    Permite tráfico entrante por tailscale0.
+#
+# Esto permite acceder al Cudy mediante:
+#
+#   SSH  -> IP Tailscale:22
+#   LuCI -> IP Tailscale:80
+#   HTTPS -> IP Tailscale:443
+#
+# La configuración del firewall es permanente.
+# El script evita duplicar la regla si se ejecuta de nuevo.
 # ============================================================
 
 set -u
@@ -176,7 +185,6 @@ if ! /etc/init.d/tailscale status >/dev/null 2>&1; then
     /etc/init.d/tailscale start
 
     sleep 3
-
 fi
 
 if /etc/init.d/tailscale status >/dev/null 2>&1; then
@@ -232,8 +240,8 @@ else
     ok "Tailscale está autenticado y funcionando."
     ok "No se modifica la autenticación existente."
 
-    if tailscale set \
-        --hostname="$TS_HOSTNAME" >/dev/null 2>&1; then
+    if tailscale set --hostname="$TS_HOSTNAME" \
+        >/dev/null 2>&1; then
 
         ok "Hostname Tailscale actualizado."
 
@@ -246,27 +254,12 @@ else
 fi
 
 # ------------------------------------------------------------
-# 10. CONFIGURACIÓN CRÍTICA PARA OPENWRT / CUDY
+# 10. CONFIGURACIÓN TAILSCALE
 # ------------------------------------------------------------
 
 echo ""
 echo "Configurando Tailscale para OpenWrt / Cudy..."
 echo ""
-
-#
-# Tailscale puede detectar nftables y activar automáticamente
-# NetfilterMode=2 (nft-forced).
-#
-# En nuestros Cudy esto puede provocar conflictos con el
-# firewall de OpenWrt y bloquear tráfico Tailscale.
-#
-# La configuración comprobada es:
-#
-#     NetfilterMode=0
-#
-# Tailscale deja de modificar nftables y OpenWrt mantiene
-# el control de su propio firewall.
-#
 
 if tailscale set --netfilter-mode=off >/dev/null 2>&1; then
 
@@ -304,24 +297,144 @@ else
 fi
 
 # ------------------------------------------------------------
-# 12. Comprobar servicio
+# 12. Comprobar interfaz tailscale0
 # ------------------------------------------------------------
+
+echo ""
+echo "Comprobando interfaz tailscale0..."
 
 sleep 2
 
-if /etc/init.d/tailscale status >/dev/null 2>&1; then
+if ip link show tailscale0 >/dev/null 2>&1; then
 
-    ok "Servicio Tailscale funcionando correctamente."
+    ok "Interfaz tailscale0 detectada."
 
 else
 
-    error "Tailscale dejó de funcionar después de configurar Netfilter."
+    error "No existe la interfaz tailscale0."
     exit 1
 
 fi
 
 # ------------------------------------------------------------
-# 13. Obtener IP Tailscale
+# 13. CONFIGURAR FIREWALL OPENWRT
+# ------------------------------------------------------------
+#
+# IMPORTANTE:
+#
+# OpenWrt tiene fw4 con política INPUT=DROP.
+#
+# Tailscale funciona correctamente, pero el tráfico que entra
+# por tailscale0 no pertenece a la zona LAN.
+#
+# Por ello hay que permitir explícitamente:
+#
+#     iifname tailscale0 -> ACCEPT
+#
+# La regla se crea mediante UCI para que sea permanente.
+#
+# Antes de crearla comprobamos si ya existe.
+# ------------------------------------------------------------
+
+echo ""
+echo "Configurando firewall OpenWrt para Tailscale..."
+echo ""
+
+TS_RULE_EXISTS=""
+
+for RULE in $(uci show firewall 2>/dev/null | \
+    grep "=rule" | \
+    cut -d= -f1); do
+
+    NAME=$(uci -q get "$RULE.name")
+
+    SRC_IP=$(uci -q get "$RULE.src_ip")
+
+    DEVICE=$(uci -q get "$RULE.device")
+
+    if [ "$NAME" = "Allow-Tailscale" ] || \
+       [ "$DEVICE" = "tailscale0" ] || \
+       [ "$SRC_IP" = "100.64.0.0/10" ]; then
+
+        TS_RULE_EXISTS="$RULE"
+        break
+
+    fi
+
+done
+
+if [ -n "$TS_RULE_EXISTS" ]; then
+
+    ok "Regla de firewall Tailscale ya existente."
+
+else
+
+    TS_RULE_EXISTS=$(uci add firewall rule)
+
+    uci set firewall."$TS_RULE_EXISTS".name='Allow-Tailscale'
+    uci set firewall."$TS_RULE_EXISTS".src='*'
+    uci set firewall."$TS_RULE_EXISTS".proto='all'
+    uci set firewall."$TS_RULE_EXISTS".target='ACCEPT'
+    uci set firewall."$TS_RULE_EXISTS".device='tailscale0'
+
+    uci commit firewall
+
+    ok "Regla Allow-Tailscale creada."
+
+fi
+
+# ------------------------------------------------------------
+# 14. Aplicar firewall
+# ------------------------------------------------------------
+
+echo ""
+echo "Aplicando configuración del firewall..."
+echo ""
+
+if /etc/init.d/firewall restart >/dev/null 2>&1; then
+
+    ok "Firewall OpenWrt actualizado."
+
+else
+
+    error "No se pudo reiniciar el firewall."
+    exit 1
+
+fi
+
+sleep 2
+
+# ------------------------------------------------------------
+# 15. Verificar regla nftables
+# ------------------------------------------------------------
+
+if nft list ruleset 2>/dev/null |
+    grep -q 'iifname "tailscale0".*accept'; then
+
+    ok "Firewall: tráfico de tailscale0 permitido."
+
+else
+
+    warn "No se ha podido localizar la regla nftables."
+    warn "La configuración UCI se ha guardado igualmente."
+
+fi
+
+# ------------------------------------------------------------
+# 16. Comprobar estado del servicio
+# ------------------------------------------------------------
+
+if ! /etc/init.d/tailscale status >/dev/null 2>&1; then
+
+    error "Tailscale dejó de funcionar después de configurar el firewall."
+    exit 1
+
+fi
+
+ok "Servicio Tailscale funcionando correctamente."
+
+# ------------------------------------------------------------
+# 17. Comprobar IP Tailscale
 # ------------------------------------------------------------
 
 TS_IP=$(tailscale ip -4 2>/dev/null | head -n 1)
@@ -336,7 +449,7 @@ fi
 ok "IP Tailscale: $TS_IP"
 
 # ------------------------------------------------------------
-# 14. Comprobar estado final
+# 18. Comprobar estado final
 # ------------------------------------------------------------
 
 FINAL_STATE=$(tailscale status 2>&1)
@@ -353,13 +466,13 @@ else
 fi
 
 # ------------------------------------------------------------
-# 15. Asegurar permisos
+# 19. Asegurar permisos
 # ------------------------------------------------------------
 
 chmod +x /root/install-tailscale.sh 2>/dev/null || true
 
 # ------------------------------------------------------------
-# 16. Resumen final
+# 20. RESUMEN FINAL
 # ------------------------------------------------------------
 
 echo ""
@@ -374,6 +487,13 @@ echo "Servicio            : RUNNING"
 echo "Autenticación       : OK"
 echo "DNS Tailscale       : DESACTIVADO"
 echo "Netfilter Tailscale : OFF"
+echo "Firewall Tailscale  : ALLOW"
+echo ""
+echo "Acceso SSH:"
+echo "  ssh root@$TS_IP"
+echo ""
+echo "Acceso LuCI:"
+echo "  http://$TS_IP"
 echo ""
 echo "============================================================"
 echo ""
